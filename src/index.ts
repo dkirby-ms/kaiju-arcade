@@ -8,6 +8,7 @@
 import express from "express";
 import { createServer } from "http";
 import { Server as ColyseusServer } from "colyseus";
+import { matchMaker } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./game/MatchRoom";
 import { getVersionInfo } from "./utils/version";
@@ -22,6 +23,7 @@ const gameServer = new ColyseusServer({
 
 const port = process.env.PORT || 3000;
 const hostname = process.env.HOST || "localhost";
+const portNum = typeof port === "string" ? parseInt(port, 10) : port;
 
 // Middleware
 app.use(express.json());
@@ -40,12 +42,26 @@ app.get("/version", (_req, res) => {
 gameServer.define("match", MatchRoom);
 
 // REST API: Create new match
-app.post("/api/matches", (req, res) => {
+app.post("/api/matches", async (req, res) => {
   try {
     const options = req.body || {};
+
+    const reservation = await matchMaker.create("match", options as Record<string, unknown>);
+
     res.json({
-      message: "Match created. Connect via WebSocket to /match",
-      options,
+      roomName: "match",
+      sessionId: reservation.sessionId,
+      roomId: reservation.roomId,
+      processId: reservation.processId,
+      publicAddress: reservation.publicAddress,
+      wsEndpoint: `ws://${hostname}:${portNum}`,
+      reconnect: {
+        enabled: true,
+        tokenRequired: true,
+        graceWindowMs: 30_000,
+        optionKey: "reconnectToken",
+      },
+      message: "Match created with seat reservation. Join by roomId/sessionId via Colyseus client.",
     });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
@@ -53,31 +69,32 @@ app.post("/api/matches", (req, res) => {
 });
 
 // REST API: List active matches
-app.get("/api/matches", (_req, res) => {
-  // Workaround for internal API access
-  const matchRooms = (gameServer as any)["_roomsById"] as
-    | Record<string, any>
-    | undefined;
+app.get("/api/matches", async (_req, res) => {
+  try {
+    const rooms = await matchMaker.query({
+      name: "match",
+      private: false,
+      locked: false,
+    });
 
-  const matches = matchRooms
-    ? Object.values(matchRooms).map((room: any) => {
-        return {
-          roomId: room.roomId,
-          name: room.name,
-          clients: room.clients?.length || 0,
-          maxClients: room.maxClients,
-        };
-      })
-    : [];
+    const matches = rooms.map((room) => ({
+      roomId: room.roomId,
+      name: room.name,
+      clients: room.clients,
+      maxClients: room.maxClients,
+      locked: room.locked,
+    }));
 
-  res.json({ matches, total: matches.length });
+    res.json({ matches, total: matches.length });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
 });
 
-// Start server
-const portNum = typeof port === "string" ? parseInt(port, 10) : port;
-httpServer.listen(portNum, hostname as string, () => {
-  const version = getVersionInfo();
-  console.log(`
+export function startServer() {
+  return httpServer.listen(portNum, hostname as string, () => {
+    const version = getVersionInfo();
+    console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║           🦑 KAIJU ARCADE SERVER STARTED 🦑               ║
 ╠════════════════════════════════════════════════════════════╣
@@ -88,9 +105,14 @@ httpServer.listen(portNum, hostname as string, () => {
 ║ Health:  http://${hostname}:${portNum}/health              ║
 ║ API:     http://${hostname}:${portNum}/api/matches         ║
 ╚════════════════════════════════════════════════════════════╝
-  `.trim());
-  console.log("Ready for players to join!");
-});
+    `.trim());
+    console.log("Ready for players to join!");
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
 
 // Graceful shutdown
 process.on("SIGINT", () => {

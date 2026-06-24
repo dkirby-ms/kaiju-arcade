@@ -5,7 +5,7 @@
  * All fields are synchronized automatically from server to clients.
  */
 
-import { Schema, type, ArraySchema } from "@colyseus/schema";
+import { Schema, type, ArraySchema, MapSchema } from "@colyseus/schema";
 
 /**
  * Leviathan / Kaiju entity
@@ -209,6 +209,14 @@ export class CommanderStateSchema extends Schema {
 
   @type("string")
   selectedLeviathanId: string = ""; // Currently selected kaiju for dispatch
+
+  @type({ map: "number" })
+  assetsRemaining = new MapSchema<number>({
+    "Scramble Jets": 5,
+    "Deploy Mechs": 3,
+    "Raise Barrier": 4,
+    "Evac Sector": 2,
+  });
 }
 
 /**
@@ -274,6 +282,278 @@ export class MatchSchema extends Schema {
       this.signalFeed.shift();
     }
   }
+
+  /**
+   * Serialize the current match state into a JSON-safe snapshot.
+   */
+  toSnapshot(): MatchSnapshot {
+    return {
+      metadata: {
+        matchId: this.metadata.matchId,
+        startedAt: this.metadata.startedAt,
+        now: this.metadata.now,
+        state: this.metadata.state,
+        outcome: this.metadata.outcome,
+        commanderScore: this.metadata.commanderScore,
+        comboPeak: this.metadata.comboPeak,
+        tickCount: this.metadata.tickCount,
+        roundTimerMs: this.metadata.roundTimerMs,
+      },
+      cityBase: {
+        id: this.cityBase.id,
+        cityName: this.cityBase.cityName,
+        hp: this.cityBase.hp,
+        hpMax: this.cityBase.hpMax,
+        x: this.cityBase.x,
+        y: this.cityBase.y,
+        damageLastTick: this.cityBase.damageLastTick,
+        totalDamage: this.cityBase.totalDamage,
+      },
+      commander: {
+        playerId: this.commander.playerId,
+        playerName: this.commander.playerName,
+        selectedLeviathanId: this.commander.selectedLeviathanId,
+        assetsRemaining: Object.fromEntries(this.commander.assetsRemaining),
+      },
+      leviathans: this.leviathans.map((leviathan: LeviathanSchema) => ({
+        id: leviathan.id,
+        name: leviathan.name,
+        archetype: leviathan.archetype,
+        hp: leviathan.hp,
+        hpMax: leviathan.hpMax,
+        x: leviathan.x,
+        y: leviathan.y,
+        heading: leviathan.heading,
+        speed: leviathan.speed,
+        status: leviathan.status,
+        statusEndTime: leviathan.statusEndTime,
+        lastAttackTime: leviathan.lastAttackTime,
+        credits: leviathan.credits,
+        isAI: leviathan.isAI,
+        playerId: leviathan.playerId,
+        playerName: leviathan.playerName,
+        damageDealt: leviathan.damageDealt,
+        damageReceived: leviathan.damageReceived,
+      })),
+      dispatchHistory: this.dispatchHistory.map((dispatch: DispatchRecordSchema) => ({
+        id: dispatch.id,
+        assetName: dispatch.assetName,
+        targetId: dispatch.targetId,
+        dispatchedAt: dispatch.dispatchedAt,
+        resolvedAt: dispatch.resolvedAt,
+        outcome: dispatch.outcome,
+        delayMs: dispatch.delayMs,
+        applied: dispatch.applied,
+      })),
+      signalFeed: this.signalFeed.map((signal: SignalFeedEntrySchema) => ({
+        timestamp: signal.timestamp,
+        message: signal.message,
+        severity: signal.severity,
+        source: signal.source,
+      })),
+      activeBarriers: this.activeBarriers.map((barrier: BarrierSchema) => ({
+        id: barrier.id,
+        createdAt: barrier.createdAt,
+        expiresAt: barrier.expiresAt,
+        damageAbsorbed: barrier.damageAbsorbed,
+      })),
+    };
+  }
+
+  /**
+   * Serialize snapshot as a string for persistence.
+   */
+  serializeSnapshot(): string {
+    return JSON.stringify(this.toSnapshot());
+  }
+
+  /**
+   * Build schema state from a previously serialized snapshot object.
+   */
+  static fromSnapshot(snapshot: MatchSnapshot): MatchSchema {
+    const state = new MatchSchema();
+
+    state.metadata.matchId = snapshot.metadata.matchId;
+    state.metadata.startedAt = snapshot.metadata.startedAt;
+    state.metadata.now = snapshot.metadata.now;
+    state.metadata.state = snapshot.metadata.state;
+    state.metadata.outcome = snapshot.metadata.outcome;
+    state.metadata.commanderScore = snapshot.metadata.commanderScore;
+    state.metadata.comboPeak = snapshot.metadata.comboPeak;
+    state.metadata.tickCount = snapshot.metadata.tickCount;
+    state.metadata.roundTimerMs = snapshot.metadata.roundTimerMs;
+
+    state.cityBase.id = snapshot.cityBase.id;
+    state.cityBase.cityName = snapshot.cityBase.cityName;
+    state.cityBase.hp = snapshot.cityBase.hp;
+    state.cityBase.hpMax = snapshot.cityBase.hpMax;
+    state.cityBase.x = snapshot.cityBase.x;
+    state.cityBase.y = snapshot.cityBase.y;
+    state.cityBase.damageLastTick = snapshot.cityBase.damageLastTick;
+    state.cityBase.totalDamage = snapshot.cityBase.totalDamage;
+
+    state.commander.playerId = snapshot.commander.playerId;
+    state.commander.playerName = snapshot.commander.playerName;
+    state.commander.selectedLeviathanId = snapshot.commander.selectedLeviathanId;
+    state.commander.assetsRemaining.clear();
+    for (const [assetName, count] of Object.entries(snapshot.commander.assetsRemaining)) {
+      state.commander.assetsRemaining.set(assetName, count);
+    }
+
+    state.leviathans.clear();
+    for (const leviathanSnapshot of snapshot.leviathans) {
+      const leviathan = new LeviathanSchema();
+      leviathan.id = leviathanSnapshot.id;
+      leviathan.name = leviathanSnapshot.name;
+      leviathan.archetype = leviathanSnapshot.archetype;
+      leviathan.hp = leviathanSnapshot.hp;
+      leviathan.hpMax = leviathanSnapshot.hpMax;
+      leviathan.x = leviathanSnapshot.x;
+      leviathan.y = leviathanSnapshot.y;
+      leviathan.heading = leviathanSnapshot.heading;
+      leviathan.speed = leviathanSnapshot.speed;
+      leviathan.status = leviathanSnapshot.status;
+      leviathan.statusEndTime = leviathanSnapshot.statusEndTime;
+      leviathan.lastAttackTime = leviathanSnapshot.lastAttackTime;
+      leviathan.credits = leviathanSnapshot.credits;
+      leviathan.isAI = leviathanSnapshot.isAI;
+      leviathan.playerId = leviathanSnapshot.playerId;
+      leviathan.playerName = leviathanSnapshot.playerName;
+      leviathan.damageDealt = leviathanSnapshot.damageDealt;
+      leviathan.damageReceived = leviathanSnapshot.damageReceived;
+      state.leviathans.push(leviathan);
+    }
+
+    state.dispatchHistory.clear();
+    for (const dispatchSnapshot of snapshot.dispatchHistory) {
+      const dispatch = new DispatchRecordSchema();
+      dispatch.id = dispatchSnapshot.id;
+      dispatch.assetName = dispatchSnapshot.assetName;
+      dispatch.targetId = dispatchSnapshot.targetId;
+      dispatch.dispatchedAt = dispatchSnapshot.dispatchedAt;
+      dispatch.resolvedAt = dispatchSnapshot.resolvedAt;
+      dispatch.outcome = dispatchSnapshot.outcome;
+      dispatch.delayMs = dispatchSnapshot.delayMs;
+      dispatch.applied = dispatchSnapshot.applied;
+      state.dispatchHistory.push(dispatch);
+    }
+
+    state.signalFeed.clear();
+    for (const signalSnapshot of snapshot.signalFeed) {
+      const signal = new SignalFeedEntrySchema();
+      signal.timestamp = signalSnapshot.timestamp;
+      signal.message = signalSnapshot.message;
+      signal.severity = signalSnapshot.severity;
+      signal.source = signalSnapshot.source;
+      state.signalFeed.push(signal);
+    }
+
+    state.activeBarriers.clear();
+    for (const barrierSnapshot of snapshot.activeBarriers) {
+      const barrier = new BarrierSchema();
+      barrier.id = barrierSnapshot.id;
+      barrier.createdAt = barrierSnapshot.createdAt;
+      barrier.expiresAt = barrierSnapshot.expiresAt;
+      barrier.damageAbsorbed = barrierSnapshot.damageAbsorbed;
+      state.activeBarriers.push(barrier);
+    }
+
+    return state;
+  }
+
+  /**
+   * Parse a serialized snapshot string and return hydrated schema state.
+   */
+  static deserializeSnapshot(serialized: string): MatchSchema {
+    const parsed = JSON.parse(serialized) as MatchSnapshot;
+    return MatchSchema.fromSnapshot(parsed);
+  }
+}
+
+export interface MatchSnapshot {
+  metadata: MatchMetadataSnapshot;
+  cityBase: CityBaseSnapshot;
+  commander: CommanderSnapshot;
+  leviathans: LeviathanSnapshot[];
+  dispatchHistory: DispatchRecordSnapshot[];
+  signalFeed: SignalFeedEntrySnapshot[];
+  activeBarriers: BarrierSnapshot[];
+}
+
+export interface MatchMetadataSnapshot {
+  matchId: string;
+  startedAt: number;
+  now: number;
+  state: string;
+  outcome: string;
+  commanderScore: number;
+  comboPeak: number;
+  tickCount: number;
+  roundTimerMs: number;
+}
+
+export interface CityBaseSnapshot {
+  id: string;
+  cityName: string;
+  hp: number;
+  hpMax: number;
+  x: number;
+  y: number;
+  damageLastTick: number;
+  totalDamage: number;
+}
+
+export interface CommanderSnapshot {
+  playerId: string;
+  playerName: string;
+  selectedLeviathanId: string;
+  assetsRemaining: Record<string, number>;
+}
+
+export interface LeviathanSnapshot {
+  id: string;
+  name: string;
+  archetype: string;
+  hp: number;
+  hpMax: number;
+  x: number;
+  y: number;
+  heading: number;
+  speed: number;
+  status: string;
+  statusEndTime: number;
+  lastAttackTime: number;
+  credits: number;
+  isAI: boolean;
+  playerId: string;
+  playerName: string;
+  damageDealt: number;
+  damageReceived: number;
+}
+
+export interface DispatchRecordSnapshot {
+  id: string;
+  assetName: string;
+  targetId: string;
+  dispatchedAt: number;
+  resolvedAt: number;
+  outcome: string;
+  delayMs: number;
+  applied: boolean;
+}
+
+export interface SignalFeedEntrySnapshot {
+  timestamp: number;
+  message: string;
+  severity: string;
+  source: string;
+}
+
+export interface BarrierSnapshot {
+  id: string;
+  createdAt: number;
+  expiresAt: number;
+  damageAbsorbed: number;
 }
 
 /**
