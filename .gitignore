@@ -35,3 +35,4 @@ coverage/
 
 # Misc
 .colyseus_cache
+node_modules
