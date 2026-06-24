@@ -14,7 +14,9 @@
  */
 export interface CommanderSelectMessage {
   type: "commander.select";
-  leviathonId: string;
+  leviathanId?: string;
+  // Temporary backward compatibility for existing clients.
+  leviathonId?: string;
 }
 
 export interface CommanderDispatchMessage {
@@ -54,8 +56,8 @@ export type ClientMessage =
  */
 export interface KaijuContainedSignal {
   type: "kaiju.contained";
-  leviathonId: string;
-  leviathonName: string;
+  leviathanId: string;
+  leviathanName: string;
 }
 
 export interface SignalFeedEvent {
@@ -76,6 +78,26 @@ export interface MatchResultEvent {
   };
 }
 
+export interface MatchStartEvent {
+  type: "match.start";
+  matchId: string;
+  cityName: string;
+  startedAt: number;
+  kaijuSlots: Array<{
+    id: string;
+    name: string;
+    archetype: string;
+    isAI: boolean;
+  }>;
+}
+
+export interface KaijuReconnectTokenEvent {
+  type: "kaiju.reconnect.token";
+  leviathanId: string;
+  reconnectToken: string;
+  graceWindowMs: number;
+}
+
 export interface GameStateUpdateEvent {
   type: "game.state.update";
   // Colyseus handles the delta encoding; this is just a marker for client code
@@ -85,6 +107,8 @@ export type ServerEvent =
   | KaijuContainedSignal
   | SignalFeedEvent
   | MatchResultEvent
+  | MatchStartEvent
+  | KaijuReconnectTokenEvent
   | GameStateUpdateEvent;
 
 /**
@@ -119,9 +143,13 @@ export function validateCommanderSelect(msg: unknown): msg is CommanderSelectMes
   const m = msg as Record<string, unknown>;
   return (
     m.type === "commander.select" &&
-    typeof m.leviathonId === "string" &&
-    m.leviathonId.length > 0
+    ((typeof m.leviathanId === "string" && m.leviathanId.length > 0) ||
+      (typeof m.leviathonId === "string" && m.leviathonId.length > 0))
   );
+}
+
+export function getCommanderSelectLeviathanId(msg: CommanderSelectMessage): string {
+  return msg.leviathanId ?? msg.leviathonId ?? "";
 }
 
 export function validateCommanderDispatch(msg: unknown): msg is CommanderDispatchMessage {

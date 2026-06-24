@@ -16,6 +16,7 @@ import {
 } from "../schema/MatchSchema";
 import {
   ClientMessage,
+  getCommanderSelectLeviathanId,
   validateCommanderSelect,
   validateCommanderDispatch,
   validateKaijuMove,
@@ -24,7 +25,15 @@ import {
   validateKaijuContinue,
 } from "../messages/protocol";
 import { executeTick, validateTickTiming } from "./GameLoop";
+import { selectCityBase } from "./lastStandCities";
 import { v4 as uuid } from "uuid";
+
+const COMMANDER_ASSET_STARTING_COUNTS: Record<string, number> = {
+  "Scramble Jets": 5,
+  "Deploy Mechs": 3,
+  "Raise Barrier": 4,
+  "Evac Sector": 2,
+};
 
 interface PlayerSession {
   clientId: string;
@@ -34,8 +43,36 @@ interface PlayerSession {
   playerName: string;
 }
 
+interface MatchResultSummary {
+  baseHPRemaining: number;
+  commanderScore: number;
+  comboPeak: number;
+  duration: number;
+}
+
+type MatchResultOutcome = "kaiju-victory" | "commander-victory" | "time-limit" | "aborted";
+
+interface ReconnectGraceWindow {
+  leviathanId: string;
+  reconnectToken: string;
+  timeoutId: NodeJS.Timeout;
+  expiresAt: number;
+}
+
+interface ReconnectTokenPayload {
+  type: "kaiju.reconnect.token";
+  leviathanId: string;
+  reconnectToken: string;
+  graceWindowMs: number;
+}
+
 export class MatchRoom extends Room<MatchSchema> {
+  private static readonly MAX_KAIJU_SLOTS = 4;
+  private static readonly RECONNECT_GRACE_MS = 30_000;
+
   private playerSessions: Map<string, PlayerSession> = new Map();
+  private reconnectGraceWindows: Map<string, ReconnectGraceWindow> = new Map();
+  private reconnectTokenByLeviathanId: Map<string, string> = new Map();
   private tickIntervalId?: NodeJS.Timeout;
   private lastTickTime: number = 0;
   private tickDeltaMs: number = 0;
@@ -55,7 +92,7 @@ export class MatchRoom extends Room<MatchSchema> {
     // Initialize city base from options or use default
     this.state.cityBase = new CityBaseSchema();
     this.state.cityBase.id = uuid();
-    this.state.cityBase.cityName = (options.cityName as string) || "Neo Tokyo";
+    this.state.cityBase.cityName = selectCityBase(options.cityName as string | undefined);
     this.state.cityBase.hp = GAME_CONSTANTS.CITY_BASE_HP;
     this.state.cityBase.hpMax = GAME_CONSTANTS.CITY_BASE_HP;
     this.state.cityBase.x = 50;
@@ -65,13 +102,14 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state.commander = new CommanderStateSchema();
 
     // Initialize asset cooldowns
-    this.state.commander.assetsRemaining?.set("Scramble Jets", 5);
-    this.state.commander.assetsRemaining?.set("Deploy Mechs", 3);
-    this.state.commander.assetsRemaining?.set("Raise Barrier", 4);
-    this.state.commander.assetsRemaining?.set("Evac Sector", 2);
+    for (const [assetName, count] of Object.entries(COMMANDER_ASSET_STARTING_COUNTS)) {
+      this.state.commander.assetsRemaining.set(assetName, count);
+    }
+
+    this.seedKaijuSlots();
 
     // Set room options
-    this.maxClients = 5; // 1 commander + up to 4 kaiju
+    this.maxClients = 1 + MatchRoom.MAX_KAIJU_SLOTS; // 1 commander + up to 4 kaiju
     this.autoDispose = true;
 
     // Set up message handlers
@@ -107,10 +145,20 @@ export class MatchRoom extends Room<MatchSchema> {
       console.log(`${playerName} assigned as COMMANDER`);
       this.state.addSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
     } else {
-      // Create Leviathan for Kaiju player
-      const leviathan = this.createLeviathanForPlayer(client.sessionId, playerName);
+      const reconnectToken =
+        typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
+
+      // Reclaim by reconnect token first, then claim an open AI slot.
+      const leviathan =
+        this.reclaimKaijuGraceSlot(reconnectToken, client.sessionId, playerName) ??
+        this.claimKaijuSlot(client.sessionId, playerName);
+      if (!leviathan) {
+        console.warn("No kaiju slot available for joining player");
+        return;
+      }
+
       session.leviathanId = leviathan.id;
-      this.state.leviathans.push(leviathan);
+      this.sendReconnectToken(client, leviathan.id);
       console.log(`${playerName} assigned as KAIJU ${leviathan.name}`);
       this.state.addSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
     }
@@ -126,7 +174,7 @@ export class MatchRoom extends Room<MatchSchema> {
     }
   }
 
-  onLeave(client: Client) {
+  onLeave(client: Client, code?: number) {
     console.log(`Client ${client.sessionId} left`);
 
     const session = this.playerSessions.get(client.sessionId);
@@ -143,17 +191,19 @@ export class MatchRoom extends Room<MatchSchema> {
         this.state.metadata.outcome = "ABORTED";
       }
     } else {
-      // Kaiju player disconnected - start 30s grace window for reconnection
+      // Kaiju player disconnected - start 30s grace window for reconnection.
       if (session.leviathanId) {
         const leviathan = this.state.getLeviathan(session.leviathanId);
         if (leviathan) {
-          console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
-          this.state.addSignal(
-            `KAIJU ${leviathan.name} CONNECTION LOST - GRACE WINDOW ACTIVE`,
-            "alert",
-            "SYSTEM"
-          );
-          // Could implement grace window timeout here
+          const hasReconnectCredits = leviathan.credits > 0;
+          const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
+          const canGraceReconnect = disconnectedAbruptly && hasReconnectCredits;
+
+          if (canGraceReconnect) {
+            this.startReconnectGraceWindow(leviathan, session);
+          } else {
+            this.promoteSlotToAI(leviathan);
+          }
         }
       }
     }
@@ -177,7 +227,7 @@ export class MatchRoom extends Room<MatchSchema> {
       switch (message.type) {
         case "commander.select":
           if (validateCommanderSelect(message) && session.role === "COMMANDER") {
-            this.handleCommanderSelect(message.leviathonId);
+            this.handleCommanderSelect(getCommanderSelectLeviathanId(message));
           }
           break;
 
@@ -234,6 +284,13 @@ export class MatchRoom extends Room<MatchSchema> {
     assetName: string,
     targetId: string
   ) {
+    const assetsRemaining = this.state.commander.assetsRemaining.get(assetName) ?? 0;
+    if (assetsRemaining <= 0) {
+      this.state.addSignal(`DISPATCH FAILED: ${assetName} DEPLETED`, "alert", "SYSTEM");
+      return;
+    }
+
+    this.state.commander.assetsRemaining.set(assetName, assetsRemaining - 1);
     console.log(`Commander dispatched ${assetName} on ${targetId}`);
     // Validation and resolution will happen in the game loop
     this.state.addSignal(`DISPATCH: ${assetName}`, "nominal", "COMMANDER");
@@ -277,22 +334,29 @@ export class MatchRoom extends Room<MatchSchema> {
     }
   }
 
-  private createLeviathanForPlayer(playerId: string, playerName: string): LeviathanSchema {
+  private createLeviathan(
+    index: number,
+    playerId: string,
+    playerName: string,
+    isAI: boolean
+  ): LeviathanSchema {
     const archetypes = ["Sniper", "Dozer", "Berserker", "Tank"];
-    const archetype = archetypes[this.state.leviathans.length % archetypes.length];
+    const archetype = archetypes[index % archetypes.length];
 
     const leviathan = new LeviathanSchema();
     leviathan.id = uuid();
-    leviathan.name = `${archetype}-${playerName.slice(0, 3).toUpperCase()}`;
+    leviathan.name = isAI
+      ? `${archetype}-AI-${index + 1}`
+      : `${archetype}-${playerName.slice(0, 3).toUpperCase()}`;
     leviathan.archetype = archetype;
     leviathan.hp = 100;
     leviathan.hpMax = 100;
     leviathan.x = 10; // Start at map edge
-    leviathan.y = 10 + this.state.leviathans.length * 20;
+    leviathan.y = 10 + index * 20;
     leviathan.heading = 180; // Moving toward base (at 50, 50)
     leviathan.speed = 1;
     leviathan.status = "ACTIVE";
-    leviathan.isAI = false;
+    leviathan.isAI = isAI;
     leviathan.playerId = playerId;
     leviathan.playerName = playerName;
     leviathan.credits = GAME_CONSTANTS.CREDIT_COUNT;
@@ -300,15 +364,174 @@ export class MatchRoom extends Room<MatchSchema> {
     return leviathan;
   }
 
+  private seedKaijuSlots() {
+    for (let i = 0; i < MatchRoom.MAX_KAIJU_SLOTS; i++) {
+      this.state.leviathans.push(this.createLeviathan(i, "", "", true));
+    }
+  }
+
+  private claimKaijuSlot(playerId: string, playerName: string): LeviathanSchema | undefined {
+    const slot = this.state.leviathans.find(
+      (leviathan: LeviathanSchema) => leviathan.isAI && leviathan.playerId === ""
+    );
+    if (!slot) {
+      return undefined;
+    }
+
+    slot.isAI = false;
+    slot.playerId = playerId;
+    slot.playerName = playerName;
+    slot.name = `${slot.archetype}-${playerName.slice(0, 3).toUpperCase()}`;
+    slot.hp = slot.hpMax;
+    slot.credits = GAME_CONSTANTS.CREDIT_COUNT;
+    return slot;
+  }
+
+  private reclaimKaijuGraceSlot(
+    reconnectToken: string | undefined,
+    sessionId: string,
+    playerName: string
+  ): LeviathanSchema | undefined {
+    if (!reconnectToken) {
+      return undefined;
+    }
+
+    const graceWindow = Array.from(this.reconnectGraceWindows.values()).find(
+      (window: ReconnectGraceWindow) => window.reconnectToken === reconnectToken
+    );
+    if (!graceWindow) {
+      return undefined;
+    }
+
+    const leviathan = this.state.getLeviathan(graceWindow.leviathanId);
+    if (!leviathan) {
+      return undefined;
+    }
+
+    clearTimeout(graceWindow.timeoutId);
+    this.reconnectGraceWindows.delete(graceWindow.leviathanId);
+
+    leviathan.isAI = false;
+    leviathan.playerId = sessionId;
+    leviathan.playerName = playerName;
+
+    this.state.addSignal(
+      `KAIJU ${leviathan.name} RECONNECTED - GRACE RECOVERY SUCCESS`,
+      "nominal",
+      "SYSTEM"
+    );
+
+    return leviathan;
+  }
+
+  private startReconnectGraceWindow(leviathan: LeviathanSchema, session: PlayerSession) {
+    const existingWindow = this.reconnectGraceWindows.get(leviathan.id);
+    if (existingWindow) {
+      clearTimeout(existingWindow.timeoutId);
+      this.reconnectGraceWindows.delete(leviathan.id);
+    }
+
+    const reconnectToken = this.issueReconnectToken(leviathan.id);
+
+    console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
+    this.state.addSignal(
+      `KAIJU ${leviathan.name} CONNECTION LOST - GRACE WINDOW ACTIVE`,
+      "alert",
+      "SYSTEM"
+    );
+
+    const timeoutId = setTimeout(() => {
+      const currentWindow = this.reconnectGraceWindows.get(leviathan.id);
+      if (!currentWindow) {
+        return;
+      }
+
+      const latestLeviathan = this.state.getLeviathan(leviathan.id);
+      if (!latestLeviathan) {
+        this.reconnectGraceWindows.delete(leviathan.id);
+        return;
+      }
+
+      const hasActiveController = latestLeviathan.playerId.length > 0;
+      if (!hasActiveController) {
+        this.promoteSlotToAI(latestLeviathan);
+        this.state.addSignal(
+          `KAIJU ${latestLeviathan.name} GRACE WINDOW EXPIRED - AI TAKEOVER`,
+          "alert",
+          "SYSTEM"
+        );
+      }
+
+      this.reconnectGraceWindows.delete(leviathan.id);
+    }, MatchRoom.RECONNECT_GRACE_MS);
+
+    this.reconnectGraceWindows.set(leviathan.id, {
+      leviathanId: leviathan.id,
+      reconnectToken,
+      timeoutId,
+      expiresAt: Date.now() + MatchRoom.RECONNECT_GRACE_MS,
+    });
+
+    leviathan.playerId = "";
+    leviathan.playerName = session.playerName;
+  }
+
+  private promoteSlotToAI(leviathan: LeviathanSchema) {
+    leviathan.isAI = true;
+    leviathan.playerId = "";
+    leviathan.playerName = "";
+  }
+
+  private issueReconnectToken(leviathanId: string): string {
+    const reconnectToken = uuid();
+    this.reconnectTokenByLeviathanId.set(leviathanId, reconnectToken);
+    return reconnectToken;
+  }
+
+  private sendReconnectToken(client: Client, leviathanId: string) {
+    const reconnectToken = this.issueReconnectToken(leviathanId);
+
+    const payload: ReconnectTokenPayload = {
+      type: "kaiju.reconnect.token",
+      leviathanId,
+      reconnectToken,
+      graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
+    };
+
+    if (typeof client.send === "function") {
+      client.send("kaiju.reconnect.token", payload);
+    }
+  }
+
   private startMatch() {
     console.log("Match starting...");
     this.state.metadata.state = "ACTIVE";
     this.state.metadata.startedAt = Date.now();
     this.state.addSignal("MATCH START", "nominal", "SYSTEM");
+    this.broadcastMatchStart();
 
     // Start game loop: 5 Hz (200ms per tick)
     this.lastTickTime = Date.now();
     this.tickIntervalId = setInterval(() => this.tick(), GAME_CONSTANTS.TICK_MS);
+  }
+
+  private broadcastMatchStart() {
+    const payload = {
+      type: "match.start",
+      matchId: this.state.metadata.matchId,
+      cityName: this.state.cityBase.cityName,
+      startedAt: this.state.metadata.startedAt,
+      kaijuSlots: this.state.leviathans.map((leviathan: LeviathanSchema) => ({
+        id: leviathan.id,
+        name: leviathan.name,
+        archetype: leviathan.archetype,
+        isAI: leviathan.isAI,
+      })),
+    };
+
+    if (typeof this.broadcast === "function") {
+      this.broadcast("match.start", payload);
+    }
   }
 
   private tick() {
@@ -368,7 +591,42 @@ export class MatchRoom extends Room<MatchSchema> {
       clearInterval(this.tickIntervalId);
       this.tickIntervalId = undefined;
     }
-    // Could save match results, update leaderboards, etc. here
+
+    const summary: MatchResultSummary = {
+      baseHPRemaining: Math.max(0, this.state.cityBase.hp),
+      commanderScore: this.state.metadata.commanderScore,
+      comboPeak: this.state.metadata.comboPeak,
+      duration: Math.max(0, Date.now() - this.state.metadata.startedAt),
+    };
+
+    if (typeof this.broadcast === "function") {
+      this.broadcast("match.result", {
+        type: "match.result",
+        outcome: this.toResultOutcome(this.state.metadata.outcome),
+        summary,
+      });
+    }
+
+    if (Array.isArray(this.clients)) {
+      for (const client of this.clients) {
+        if (typeof client.leave === "function") {
+          client.leave();
+        }
+      }
+    }
+  }
+
+  private toResultOutcome(rawOutcome: string): MatchResultOutcome {
+    switch (rawOutcome) {
+      case "KAIJU_VICTORY":
+        return "kaiju-victory";
+      case "COMMANDER_VICTORY":
+        return "commander-victory";
+      case "TIME_LIMIT":
+        return "time-limit";
+      default:
+        return "aborted";
+    }
   }
 
   onDispose() {
@@ -376,5 +634,11 @@ export class MatchRoom extends Room<MatchSchema> {
     if (this.tickIntervalId) {
       clearInterval(this.tickIntervalId);
     }
+
+    for (const graceWindow of this.reconnectGraceWindows.values()) {
+      clearTimeout(graceWindow.timeoutId);
+    }
+    this.reconnectGraceWindows.clear();
+    this.reconnectTokenByLeviathanId.clear();
   }
 }

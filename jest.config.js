@@ -18,12 +18,15 @@ module.exports = {
     }
   },
   moduleFileExtensions: ["ts", "js", "json"],
-  globals: {
-    "ts-jest": {
-      tsconfig: {
-        esModuleInterop: true,
-        allowSyntheticDefaultImports: true
+  transform: {
+    "^.+\\.(ts|tsx)$": [
+      "ts-jest",
+      {
+        tsconfig: {
+          esModuleInterop: true,
+          allowSyntheticDefaultImports: true
+        }
       }
-    }
+    ]
   }
 };
