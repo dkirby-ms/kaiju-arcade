@@ -1,0 +1,14 @@
+concepts:
+  - name: Coordinated Damage Feedback
+    description: >-
+      When kaiju attack simultaneously within the combo window, damage numbers pop with amplified values and a distinctive visual effect (larger font, bolder weight, different color) to make synchronization visible and reward teamwork with immediate, satisfying feedback.
+    file: coordinated-damage-feedback.png
+    prompt: >-
+      Create a simple stick-figure scene showing three kaiju firing attacks at once, with damage numbers popping on screen. Normal attack damage shows as medium-sized numbers in one color. Where attacks overlap (the combo), show bigger, bolder damage numbers in a brighter/different color or with a special effect marker. Minimal lines, plain white background, black-and-white line art, no shading.
+
+  - name: Score Reveal & Leaderboard
+    description: >-
+      At round end, all kaiju see the HUMANS SAVED count displayed prominently, then the leaderboard appears showing top runs (including the Commander's just-entered initials). This creates a shared social payoff moment that drives replayability.
+    file: score-reveal-leaderboard.png
+    prompt: >-
+      Create a simple stick-figure scene of an end-of-round screen. Show a large number display at top reading "HUMANS SAVED: 47" (or similar). Below it, show a minimal leaderboard table with 3-4 rows of "ABC 42", "XYZ 38", "DEF 35" type entries. Stick figures of players looking at the screen in satisfaction. Minimal lines, plain white background, black-and-white line art, no shading or detail.

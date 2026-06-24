@@ -1,0 +1,107 @@
+slide: 5
+title: "Use Case — Commander Triage: Defense vs. Evacuation"
+section: "Use Cases"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "USE CASE (Part 1 of 4)"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#6FD2D9"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 0.8
+    text: "Use Case — Commander Triage: Defense vs. Evacuation"
+    font: "Segoe UI"
+    font_size: 22
+    font_color: "#FFFFFF"
+    font_bold: true
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 2.2
+    width: 12.0
+    height: 0.4
+    text: "Description"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.7
+    width: 12.0
+    height: 0.8
+    text: "The Incident Commander manages two competing priorities in real time: dispatching defensive assets to slow kaiju advancement and triggering rocket launches to evacuate humans. Every decision has an opportunity cost."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 3.6
+    width: 12.0
+    height: 0.4
+    text: "Overview"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 4.1
+    width: 12.0
+    height: 0.8
+    text: "During a 90-second match, the Commander operates a dashboard showing leviathan positions, asset availability, and rocket launch readiness. They must continuously decide whether to spend their action window on a defensive dispatch (slow a kaiju, reduce base damage) or a rocket launch (bank evacuees directly). Kaiju threatening the launch site may suppress or cancel an in-progress launch, forcing the Commander to clear threats first."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 5.0
+    width: 12.0
+    height: 0.4
+    text: "Business Value"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 5.5
+    width: 12.0
+    height: 0.9
+    text: "This is the game's core design tension. Without a genuine tradeoff between defense and evacuation, the Commander's role collapses into one-dimensional button-pressing. The dual-priority loop is what makes the Commander feel like an incident commander rather than a tower defense operator."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.5
+    width: 12.0
+    height: 0.35
+    text: "Source: use-cases/commander-triage.md | 2026-06-24"
+    font: "Segoe UI"
+    font_size: 8
+    font_color: "#77809A"

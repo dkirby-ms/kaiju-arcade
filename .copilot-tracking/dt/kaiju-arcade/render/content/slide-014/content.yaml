@@ -1,0 +1,140 @@
+slide: 14
+title: "Persona — The Kaiju Player"
+section: "User Personas"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "PERSONA"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#BA8CF5"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 0.8
+    text: "Persona — The Kaiju Player"
+    font: "Segoe UI"
+    font_size: 22
+    font_color: "#FFFFFF"
+    font_bold: true
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 2.2
+    width: 12.0
+    height: 0.4
+    text: "Description"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.7
+    width: 12.0
+    height: 0.7
+    text: "A Kaiju player controls a single leviathan advancing on the city. There are one to four of them per match, each on their own device (phone or tablet). They pick from a roster of distinct kaiju archetypes — each with different normal and special attacks — and have unlimited respawns via the INSERT COIN flash. Die, press a key, return to the map edge. Individually fragile but collectively unstoppable."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 3.5
+    width: 12.0
+    height: 0.4
+    text: "Goal"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 4.0
+    width: 12.0
+    height: 0.7
+    text: "Destroy the city base before the 90-second clock runs out. Coordinate timing and attacks with other kaiju — including combo sequences that amplify damage — to overwhelm the Commander's defenses. Feel like a force of nature."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 4.8
+    width: 12.0
+    height: 0.4
+    text: "Needs"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 5.3
+    width: 12.0
+    height: 0.7
+    text: "- Immediate, readable feedback: HP, abilities, cooldowns, base distance — all at a glance on a mobile screen\n- A respawn flow that feels dramatic but fast — INSERT COIN flash, press key, back in action within seconds\n- A kaiju archetype whose role in a combo is obvious from its visual design, discoverable in the first 15 seconds of play\n- Clear signal when the city base is taking damage and when a combo lands — this is how they know they're winning\n- Enough variety across archetypes to make roster choice feel meaningful across multiple sessions"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.1
+    width: 12.0
+    height: 0.3
+    text: "Mindset"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 6.45
+    width: 12.0
+    height: 0.25
+    text: "Kaiju players want to feel powerful and chaotic. Coordination happens verbally in the room — \"everyone attack NOW\" — not through complex in-game menus. They enjoy the improvised emergence of a combo that works out, and the spectacle of watching the Commander scramble. Dying repeatedly is fine; the respawn must feel exciting, not punishing. They are not trying to outthink the Commander — they are trying to overwhelm them. Short rounds mean they can try a different archetype next time."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.85
+    width: 8.6
+    height: 0.25
+    text: "Source: personas/kaiju-player.md"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+
+  - type: textbox
+    left: 10.7
+    top: 6.85
+    width: 2.0
+    height: 0.25
+    text: "2026-06-24"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+    alignment: right

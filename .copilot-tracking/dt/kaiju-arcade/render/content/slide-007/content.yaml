@@ -1,0 +1,139 @@
+slide: 7
+title: "Use Case — Commander Triage: Defense vs. Evacuation"
+section: "Use Cases"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "USE CASE (Part 3 of 4)"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#6FD2D9"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 0.8
+    text: "Use Case — Commander Triage: Defense vs. Evacuation"
+    font: "Segoe UI"
+    font_size: 22
+    font_color: "#FFFFFF"
+    font_bold: true
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 2.2
+    width: 5.8
+    height: 0.4
+    text: "Equipment Requirements"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 6.6
+    top: 2.2
+    width: 5.8
+    height: 0.4
+    text: "Operating Environment"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.7
+    width: 5.8
+    height: 0.6
+    text: "- Commander: laptop or desktop with the dashboard open in a browser\n- Network: local Wi-Fi or hotspot; all players on the same session via room code"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 6.6
+    top: 2.7
+    width: 5.8
+    height: 0.6
+    text: "Co-located social setting — bar, home, event space. Ambient noise is expected and normal. Commander screen may be visible to spectators. Match duration is 90 seconds; the environment should support rapid round turnover."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 3.5
+    width: 12.0
+    height: 0.4
+    text: "Success Criteria"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 4.0
+    width: 12.0
+    height: 1.0
+    text: "- Commander made at least one meaningful triage decision (chose launch over defense or vice versa) and can articulate why\n- Evacuation count reflects the Commander's choices — high score feels earned, not random\n- Commander wants to immediately play another round to improve their score"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 5.1
+    width: 12.0
+    height: 0.4
+    text: "Pain Points"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 5.6
+    width: 12.0
+    height: 1.0
+    text: "- If rocket launches are too easy (no risk, no constraint), the triage decision disappears\n- If the dashboard is too information-dense for a 90-second match, the Commander spends more time parsing than deciding\n- If `SignalFeed` resolution feedback is too slow or buried, the Commander can't learn from failed dispatches"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.7
+    width: 8.6
+    height: 0.25
+    text: "Source: use-cases/commander-triage.md"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+
+  - type: textbox
+    left: 10.7
+    top: 6.7
+    width: 1.9
+    height: 0.25
+    text: "Last Updated: 2026-06-24"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"

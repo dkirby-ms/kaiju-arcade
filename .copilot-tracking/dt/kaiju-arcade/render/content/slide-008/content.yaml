@@ -1,0 +1,95 @@
+slide: 8
+title: "Use Case — Commander Triage: Defense vs. Evacuation"
+section: "Use Cases"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "USE CASE (Part 4 of 4)"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#6FD2D9"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 0.8
+    text: "Use Case — Commander Triage: Defense vs. Evacuation"
+    font: "Segoe UI"
+    font_size: 22
+    font_color: "#FFFFFF"
+    font_bold: true
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 2.2
+    width: 12.0
+    height: 0.4
+    text: "Extensions"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.7
+    width: 12.0
+    height: 2.8
+    text: "- **Launch site threatened**: a kaiju within attack range of the launch site suppresses the launch; Commander must dispatch a defensive asset first\n- **Multiple simultaneous kaiju breakthroughs**: Commander must triage which threat to address, accepting some base damage\n- **Final seconds**: with base HP critically low, Commander may abandon defense entirely and spam launches to maximize evacuation count before city falls"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 5.6
+    width: 12.0
+    height: 0.4
+    text: "Evidence"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 6.1
+    width: 12.0
+    height: 0.7
+    text: "- Source: Method 1 scope conversation (2026-06-23)\n- Rocket launches as active Commander mechanic confirmed in scope\n- Triage tension (defense vs. evacuation) identified as the game's core design heart\n- 90-second match length confirmed as target"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.9
+    width: 8.6
+    height: 0.25
+    text: "Source: use-cases/commander-triage.md"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+
+  - type: textbox
+    left: 10.7
+    top: 6.9
+    width: 1.9
+    height: 0.25
+    text: "Last Updated: 2026-06-24"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"

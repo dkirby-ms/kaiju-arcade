@@ -1,0 +1,140 @@
+slide: 13
+title: "Persona — The Incident Commander"
+section: "User Personas"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "PERSONA"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#BA8CF5"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 0.8
+    text: "Persona — The Incident Commander"
+    font: "Segoe UI"
+    font_size: 22
+    font_color: "#FFFFFF"
+    font_bold: true
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 2.2
+    width: 12.0
+    height: 0.4
+    text: "Description"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.7
+    width: 12.0
+    height: 0.7
+    text: "The Incident Commander is the solo operator of the city defense dashboard. They may be a social gamer who enjoys strategy and coordination, or a first responder drawn to the familiar asymmetry of managing assets under pressure. They are the only player with no respawns — they play the full 90-second match from start to finish."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 3.5
+    width: 12.0
+    height: 0.4
+    text: "Goal"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 4.0
+    width: 12.0
+    height: 0.7
+    text: "Evacuate as many humans as possible before the kaiju destroy the city. Not to win — the city will fall. To beat their own best score and climb the leaderboard."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 4.8
+    width: 12.0
+    height: 0.4
+    text: "Needs"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 5.3
+    width: 12.0
+    height: 0.7
+    text: "- A dashboard that communicates threat state clearly under time pressure\n- Meaningful decisions: when to dispatch defensive assets vs. trigger rocket launches\n- Feedback that makes each evacuation feel earned — not passive\n- A score screen with initials entry that makes their best run feel permanent"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.1
+    width: 12.0
+    height: 0.3
+    text: "Mindset"
+    font: "Segoe UI"
+    font_size: 12
+    font_color: "#4DA3FF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 6.45
+    width: 12.0
+    height: 0.25
+    text: "The Commander thinks in triage. They accept they cannot stop the kaiju and focus on buying time. They are motivated by score optimization, not survival. They enjoy the tension of being one player against many, and the social pressure of a room watching their screen. Frustration comes when they feel helpless rather than challenged — the game must make every dispatch feel like it mattered, even in defeat."
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.85
+    width: 8.6
+    height: 0.25
+    text: "Source: personas/incident-commander.md"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+
+  - type: textbox
+    left: 10.7
+    top: 6.85
+    width: 2.0
+    height: 0.25
+    text: "2026-06-24"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+    alignment: right

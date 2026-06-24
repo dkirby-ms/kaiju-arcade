@@ -1,0 +1,63 @@
+slide: 2
+title: "Kaiju Arcade — Problem Statement"
+section: "Problem Statement"
+layout: "blank"
+
+background:
+  fill: "#0F1117"
+
+elements:
+  - type: textbox
+    left: 0.6
+    top: 0.8
+    width: 12.0
+    height: 0.5
+    text: "PROBLEM STATEMENT"
+    font: "Segoe UI"
+    font_size: 10
+    font_color: "#F07A4B"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 1.3
+    width: 12.0
+    height: 1.1
+    text: "Kaiju Arcade — Problem Statement"
+    font: "Segoe UI"
+    font_size: 30
+    font_color: "#FFFFFF"
+    font_bold: true
+
+  - type: textbox
+    left: 0.6
+    top: 2.6
+    width: 12.0
+    height: 3.9
+    text: "The absence of short-form, co-located asymmetric multiplayer games is producing an unmet need for social gaming groups who want a high-energy, consequence-free simulation of coordination under pressure for players who enjoy both solo optimization (Commander) and emergent group chaos (Kaiju). How might we build a 90-second BYOD arcade experience — where the room's verbal energy is a core mechanic, kaiju always win but the Commander scores by saving lives, and every role is legible without a tutorial — so that we can provide a replayable, score-chasing social session where defeat feels like achievement and the leaderboard keeps people coming back?"
+    font: "Segoe UI"
+    font_size: 16
+    font_color: "#D7DDEA"
+    auto_size: "shrink"
+    auto_size: "shrink"
+
+  - type: textbox
+    left: 0.6
+    top: 6.9
+    width: 8.6
+    height: 0.25
+    text: "Source: problem-statement.md"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+
+  - type: textbox
+    left: 10.7
+    top: 6.9
+    width: 2.0
+    height: 0.25
+    text: "2026-06-24"
+    font: "Segoe UI"
+    font_size: 9
+    font_color: "#77809A"
+    alignment: right
