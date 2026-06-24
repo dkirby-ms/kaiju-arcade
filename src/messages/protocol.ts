@@ -65,6 +65,29 @@ export interface SignalFeedEvent {
   timestamp: number;
   message: string;
   severity: "nominal" | "alert" | "critical";
+  dispatchId?: string;
+}
+
+export interface CommanderStatusEvent {
+  type: "commander.status";
+  timestamp: number;
+  selectedLeviathanId: string;
+  assetsRemaining: Record<string, number>;
+  assetCooldownsMsRemaining: Record<string, number>;
+  assetCooldownsReady: Record<string, boolean>;
+  assetCooldownsProgress: Record<string, number>;
+  activeBarriers: number;
+  commanderScore: number;
+  cityBaseHp: number;
+}
+
+export interface CommanderDispatchResultEvent {
+  type: "commander.dispatch.result";
+  dispatchId: string;
+  assetName: string;
+  targetId: string;
+  outcome: "SUCCESS" | "PARTIAL" | "FAILED" | "UNVERIFIED";
+  resolvedAt: number;
 }
 
 export interface MatchResultEvent {
@@ -106,6 +129,8 @@ export interface GameStateUpdateEvent {
 export type ServerEvent =
   | KaijuContainedSignal
   | SignalFeedEvent
+  | CommanderStatusEvent
+  | CommanderDispatchResultEvent
   | MatchResultEvent
   | MatchStartEvent
   | KaijuReconnectTokenEvent

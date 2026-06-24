@@ -60,6 +60,96 @@ export interface ServerEventPayload {
 }
 
 /**
+ * Commander frontend event models (server broadcast payloads)
+ */
+export interface SignalFeedEventModel {
+  type: "signal.feed";
+  timestamp: number;
+  message: string;
+  severity: "nominal" | "alert" | "critical";
+  dispatchId?: string;
+}
+
+export interface CommanderStatusEventModel {
+  type: "commander.status";
+  timestamp: number;
+  selectedLeviathanId: string;
+  assetsRemaining: Record<string, number>;
+  assetCooldownsMsRemaining: Record<string, number>;
+  assetCooldownsReady: Record<string, boolean>;
+  assetCooldownsProgress: Record<string, number>;
+  activeBarriers: number;
+  commanderScore: number;
+  cityBaseHp: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNumberRecord(value: unknown): value is Record<string, number> {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Object.values(value).every(
+    (entry) => typeof entry === "number" && Number.isFinite(entry)
+  );
+}
+
+function isBooleanRecord(value: unknown): value is Record<string, boolean> {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "boolean");
+}
+
+/**
+ * Runtime guard for commander status payloads.
+ */
+export function isCommanderStatusEventModel(
+  payload: unknown
+): payload is CommanderStatusEventModel {
+  if (!isRecord(payload) || payload.type !== "commander.status") {
+    return false;
+  }
+
+  return (
+    typeof payload.timestamp === "number" &&
+    typeof payload.selectedLeviathanId === "string" &&
+    isNumberRecord(payload.assetsRemaining) &&
+    isNumberRecord(payload.assetCooldownsMsRemaining) &&
+    isBooleanRecord(payload.assetCooldownsReady) &&
+    isNumberRecord(payload.assetCooldownsProgress) &&
+    typeof payload.activeBarriers === "number" &&
+    typeof payload.commanderScore === "number" &&
+    typeof payload.cityBaseHp === "number"
+  );
+}
+
+/**
+ * Runtime guard for signal feed payloads.
+ */
+export function isSignalFeedEventModel(payload: unknown): payload is SignalFeedEventModel {
+  if (!isRecord(payload) || payload.type !== "signal.feed") {
+    return false;
+  }
+
+  const hasValidSeverity =
+    payload.severity === "nominal" ||
+    payload.severity === "alert" ||
+    payload.severity === "critical";
+
+  return (
+    typeof payload.timestamp === "number" &&
+    typeof payload.message === "string" &&
+    hasValidSeverity &&
+    (payload.dispatchId === undefined || typeof payload.dispatchId === "string")
+  );
+}
+
+/**
  * Commander display state
  */
 export interface CommanderDisplayState {

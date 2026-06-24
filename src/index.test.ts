@@ -126,6 +126,15 @@ describe("API /api/matches", () => {
     });
   });
 
+  it("serves the commander console scaffold", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/commander/index.html");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("COMMANDER CONSOLE");
+  });
+
   it("returns 400 when create fails", async () => {
     mockCreate.mockRejectedValue(new Error("create failed"));
 

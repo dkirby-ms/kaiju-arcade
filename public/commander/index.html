@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaiju Arcade Commander Console</title>
+    <link rel="stylesheet" href="/commander/styles.css" />
+    <script src="https://unpkg.com/colyseus.js@0.15.14/dist/colyseus.js"></script>
+  </head>
+  <body>
+    <main class="console-shell">
+      <header class="console-header">
+        <h1>COMMANDER CONSOLE</h1>
+        <p class="subline">LIVE MITIGATION CONTROL SURFACE</p>
+      </header>
+
+      <section class="panel controls-panel">
+        <h2>SESSION</h2>
+        <div class="field-row">
+          <label for="playerName">Operator</label>
+          <input id="playerName" type="text" value="Commander" maxlength="24" />
+        </div>
+        <div class="field-row">
+          <label for="cityName">City</label>
+          <select id="cityName"></select>
+        </div>
+        <button id="createJoinButton" class="primary">Create Match + Join</button>
+        <p id="connectionState" class="status">OFFLINE</p>
+      </section>
+
+      <section class="panel status-panel">
+        <h2>COMMAND STATUS</h2>
+        <div class="status-grid">
+          <div>
+            <span>BASE HP</span>
+            <strong id="cityBaseHp">-</strong>
+          </div>
+          <div>
+            <span>SCORE</span>
+            <strong id="commanderScore">-</strong>
+          </div>
+          <div>
+            <span>BARRIERS</span>
+            <strong id="activeBarriers">-</strong>
+          </div>
+          <div>
+            <span>SELECTED TARGET</span>
+            <strong id="selectedTarget">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel dispatch-panel">
+        <h2>DISPATCH</h2>
+        <div class="field-row">
+          <label for="targetId">Target</label>
+          <select id="targetId"></select>
+        </div>
+        <div class="dispatch-buttons">
+          <button data-asset="Scramble Jets">Scramble Jets</button>
+          <button data-asset="Deploy Mechs">Deploy Mechs</button>
+          <button data-asset="Raise Barrier">Raise Barrier</button>
+          <button data-asset="Evac Sector">Evac Sector</button>
+        </div>
+        <ul id="assetStatus"></ul>
+      </section>
+
+      <section class="panel feed-panel">
+        <h2>SIGNAL FEED</h2>
+        <ul id="signalFeed"></ul>
+      </section>
+
+      <section class="panel feed-panel">
+        <h2>DISPATCH RESULTS</h2>
+        <ul id="dispatchResults"></ul>
+      </section>
+    </main>
+
+    <script src="/commander/app.js"></script>
+  </body>
+</html>

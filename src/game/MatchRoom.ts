@@ -35,6 +35,15 @@ const COMMANDER_ASSET_STARTING_COUNTS: Record<string, number> = {
   "Evac Sector": 2,
 };
 
+const COMMANDER_DISPATCH_COOLDOWN_MS: Record<string, number> = {
+  "Scramble Jets": 6_000,
+  "Deploy Mechs": 8_000,
+  "Raise Barrier": 12_000,
+  "Evac Sector": 10_000,
+};
+
+const COMMANDER_TARGETED_ASSETS = new Set<string>(["Scramble Jets", "Deploy Mechs"]);
+
 interface PlayerSession {
   clientId: string;
   sessionId: string;
@@ -118,6 +127,7 @@ export class MatchRoom extends Room<MatchSchema> {
     // Initialize asset cooldowns
     for (const [assetName, count] of Object.entries(COMMANDER_ASSET_STARTING_COUNTS)) {
       this.state.commander.assetsRemaining.set(assetName, count);
+      this.state.commander.assetCooldowns.set(assetName, 0);
     }
 
     this.seedKaijuSlots();
@@ -157,7 +167,7 @@ export class MatchRoom extends Room<MatchSchema> {
       this.state.commander.playerName = playerName;
       session.role = "COMMANDER";
       console.log(`${playerName} assigned as COMMANDER`);
-      this.state.addSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
+      this.emitSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
     } else {
       const reconnectToken =
         typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
@@ -176,7 +186,7 @@ export class MatchRoom extends Room<MatchSchema> {
       session.leviathanId = leviathan.id;
       this.sendReconnectToken(client, leviathan.id);
       console.log(`${playerName} assigned as KAIJU ${leviathan.name}`);
-      this.state.addSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
+      this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
     }
 
     this.playerSessions.set(client.sessionId, session);
@@ -211,7 +221,7 @@ export class MatchRoom extends Room<MatchSchema> {
       this.broadcast("match.join.rejected", telemetry);
     }
 
-    this.state.addSignal("JOIN REJECTED - MATCH AT CAPACITY", "alert", "SYSTEM");
+    this.emitSignal("JOIN REJECTED - MATCH AT CAPACITY", "alert", "SYSTEM");
     console.warn(JSON.stringify(telemetry));
   }
 
@@ -225,7 +235,7 @@ export class MatchRoom extends Room<MatchSchema> {
 
     if (session.role === "COMMANDER") {
       // Commander disconnected - replace with AI or end match
-      this.state.addSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
+      this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
       // For now, just mark as disconnected; could implement AI takeover
       if (this.state.metadata.state === "ACTIVE") {
         this.state.metadata.state = "ENDED";
@@ -318,6 +328,7 @@ export class MatchRoom extends Room<MatchSchema> {
     if (leviathan) {
       this.state.commander.selectedLeviathanId = leviathanId;
       console.log(`Commander selected ${leviathan.name}`);
+      this.broadcastCommanderStatus(Date.now());
     }
   }
 
@@ -325,16 +336,44 @@ export class MatchRoom extends Room<MatchSchema> {
     assetName: string,
     targetId: string
   ) {
+    const now = Date.now();
+    const cooldownReadyAt = this.state.commander.assetCooldowns.get(assetName) ?? 0;
+    if (now < cooldownReadyAt) {
+      const secondsRemaining = Math.ceil((cooldownReadyAt - now) / 1000);
+      this.emitSignal(
+        `DISPATCH FAILED: ${assetName} COOLDOWN ${secondsRemaining}s`,
+        "alert",
+        "SYSTEM"
+      );
+      return;
+    }
+
+    if (COMMANDER_TARGETED_ASSETS.has(assetName) && !this.state.getLeviathan(targetId)) {
+      this.emitSignal(
+        `DISPATCH FAILED: ${assetName} TARGET INVALID`,
+        "alert",
+        "SYSTEM"
+      );
+      return;
+    }
+
     const assetsRemaining = this.state.commander.assetsRemaining.get(assetName) ?? 0;
     if (assetsRemaining <= 0) {
-      this.state.addSignal(`DISPATCH FAILED: ${assetName} DEPLETED`, "alert", "SYSTEM");
+      this.emitSignal(`DISPATCH FAILED: ${assetName} DEPLETED`, "alert", "SYSTEM");
       return;
     }
 
     this.state.commander.assetsRemaining.set(assetName, assetsRemaining - 1);
+    const cooldownMs = COMMANDER_DISPATCH_COOLDOWN_MS[assetName] ?? 0;
+    this.state.commander.assetCooldowns.set(assetName, now + cooldownMs);
+
+    const dispatchRecord = this.state.createDispatchRecord(assetName, targetId, now);
+    this.state.dispatchHistory.push(dispatchRecord);
+
     console.log(`Commander dispatched ${assetName} on ${targetId}`);
     // Validation and resolution will happen in the game loop
-    this.state.addSignal(`DISPATCH: ${assetName}`, "nominal", "COMMANDER");
+    this.emitSignal(`DISPATCH: ${assetName} -> ${targetId}`, "nominal", "COMMANDER", dispatchRecord.id);
+    this.broadcastCommanderStatus(now);
   }
 
   private handleKaijuMove(leviathanId: string, heading: number) {
@@ -367,7 +406,7 @@ export class MatchRoom extends Room<MatchSchema> {
       leviathan.hp = Math.ceil(leviathan.hpMax * GAME_CONSTANTS.RESPAWN_HP_FRACTION);
       leviathan.status = "ACTIVE";
       console.log(`${leviathan.name} continued with ${leviathan.credits} credits remaining`);
-      this.state.addSignal(
+      this.emitSignal(
         `KAIJU ${leviathan.name} RESPAWNING - CREDIT USED`,
         "nominal",
         "SYSTEM"
@@ -456,7 +495,7 @@ export class MatchRoom extends Room<MatchSchema> {
     leviathan.playerId = sessionId;
     leviathan.playerName = playerName;
 
-    this.state.addSignal(
+    this.emitSignal(
       `KAIJU ${leviathan.name} RECONNECTED - GRACE RECOVERY SUCCESS`,
       "nominal",
       "SYSTEM"
@@ -475,7 +514,7 @@ export class MatchRoom extends Room<MatchSchema> {
     const reconnectToken = this.issueReconnectToken(leviathan.id);
 
     console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
-    this.state.addSignal(
+    this.emitSignal(
       `KAIJU ${leviathan.name} CONNECTION LOST - GRACE WINDOW ACTIVE`,
       "alert",
       "SYSTEM"
@@ -496,7 +535,7 @@ export class MatchRoom extends Room<MatchSchema> {
       const hasActiveController = latestLeviathan.playerId.length > 0;
       if (!hasActiveController) {
         this.promoteSlotToAI(latestLeviathan);
-        this.state.addSignal(
+        this.emitSignal(
           `KAIJU ${latestLeviathan.name} GRACE WINDOW EXPIRED - AI TAKEOVER`,
           "alert",
           "SYSTEM"
@@ -548,8 +587,9 @@ export class MatchRoom extends Room<MatchSchema> {
     console.log("Match starting...");
     this.state.metadata.state = "ACTIVE";
     this.state.metadata.startedAt = Date.now();
-    this.state.addSignal("MATCH START", "nominal", "SYSTEM");
+    this.emitSignal("MATCH START", "nominal", "SYSTEM");
     this.broadcastMatchStart();
+    this.broadcastCommanderStatus(this.state.metadata.startedAt);
 
     // Start game loop: 5 Hz (200ms per tick)
     this.lastTickTime = Date.now();
@@ -579,6 +619,7 @@ export class MatchRoom extends Room<MatchSchema> {
     const now = Date.now();
     this.tickDeltaMs = now - this.lastTickTime;
     this.lastTickTime = now;
+    const signalCountBeforeTick = this.state.signalFeed.length;
 
     this.state.metadata.now = now;
     this.state.metadata.tickCount++;
@@ -599,12 +640,129 @@ export class MatchRoom extends Room<MatchSchema> {
       now,
     });
 
+    this.broadcastDispatchResults();
+
+    // Signals generated by tick execution are mirrored over room broadcasts for commander UI.
+    this.broadcastSignalsSince(signalCountBeforeTick);
+    this.broadcastCommanderStatus(now);
+
     // Check win conditions
     this.checkWinCondition();
 
     // Check if match has ended
     if (this.state.metadata.state === "ENDED") {
       this.endMatch();
+    }
+  }
+
+  private emitSignal(
+    message: string,
+    severity: "nominal" | "alert" | "critical",
+    source: string,
+    dispatchId?: string
+  ) {
+    this.state.addSignal(message, severity, source, dispatchId ?? "");
+    const latestSignal = this.state.signalFeed[this.state.signalFeed.length - 1];
+    if (!latestSignal) {
+      return;
+    }
+
+    this.broadcastSignalEntry(
+      latestSignal.timestamp,
+      latestSignal.message,
+      latestSignal.severity,
+      latestSignal.dispatchId
+    );
+  }
+
+  private broadcastSignalsSince(startIndex: number) {
+    if (typeof this.broadcast !== "function" || this.state.signalFeed.length <= startIndex) {
+      return;
+    }
+
+    for (let i = startIndex; i < this.state.signalFeed.length; i++) {
+      const signal = this.state.signalFeed[i];
+      if (!signal) {
+        continue;
+      }
+
+      this.broadcastSignalEntry(signal.timestamp, signal.message, signal.severity, signal.dispatchId);
+    }
+  }
+
+  private broadcastSignalEntry(
+    timestamp: number,
+    message: string,
+    severity: string,
+    dispatchId?: string
+  ) {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    this.broadcast("signal.feed", {
+      type: "signal.feed",
+      timestamp,
+      message,
+      severity,
+      ...(dispatchId ? { dispatchId } : {}),
+    });
+  }
+
+  private broadcastCommanderStatus(timestamp: number) {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    const assetCooldownsMsRemaining: Record<string, number> = {};
+    const assetCooldownsReady: Record<string, boolean> = {};
+    const assetCooldownsProgress: Record<string, number> = {};
+    for (const [assetName, readyAt] of this.state.commander.assetCooldowns.entries()) {
+      const remainingMs = Math.max(0, readyAt - timestamp);
+      const cooldownMs = COMMANDER_DISPATCH_COOLDOWN_MS[assetName] ?? 0;
+      const normalizedProgress = cooldownMs <= 0
+        ? 1
+        : Math.max(0, Math.min(1, (cooldownMs - remainingMs) / cooldownMs));
+
+      assetCooldownsMsRemaining[assetName] = remainingMs;
+      assetCooldownsReady[assetName] = remainingMs === 0;
+      assetCooldownsProgress[assetName] = normalizedProgress;
+    }
+
+    this.broadcast("commander.status", {
+      type: "commander.status",
+      timestamp,
+      selectedLeviathanId: this.state.commander.selectedLeviathanId,
+      assetsRemaining: Object.fromEntries(this.state.commander.assetsRemaining),
+      assetCooldownsMsRemaining,
+      assetCooldownsReady,
+      assetCooldownsProgress,
+      activeBarriers: this.state.activeBarriers.length,
+      commanderScore: this.state.metadata.commanderScore,
+      cityBaseHp: this.state.cityBase.hp,
+    });
+  }
+
+  private broadcastDispatchResults() {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    for (const dispatch of this.state.dispatchHistory) {
+      if (dispatch.resolvedAt <= 0 || dispatch.applied) {
+        continue;
+      }
+
+      this.broadcast("commander.dispatch.result", {
+        type: "commander.dispatch.result",
+        dispatchId: dispatch.id,
+        assetName: dispatch.assetName,
+        targetId: dispatch.targetId,
+        outcome: dispatch.outcome,
+        resolvedAt: dispatch.resolvedAt,
+      });
+
+      dispatch.applied = true;
     }
   }
 

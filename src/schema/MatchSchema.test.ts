@@ -14,6 +14,11 @@ describe("CommanderStateSchema", () => {
     expect(commander.assetsRemaining.get("Deploy Mechs")).toBe(3);
     expect(commander.assetsRemaining.get("Raise Barrier")).toBe(4);
     expect(commander.assetsRemaining.get("Evac Sector")).toBe(2);
+
+    expect(commander.assetCooldowns.get("Scramble Jets")).toBe(0);
+    expect(commander.assetCooldowns.get("Deploy Mechs")).toBe(0);
+    expect(commander.assetCooldowns.get("Raise Barrier")).toBe(0);
+    expect(commander.assetCooldowns.get("Evac Sector")).toBe(0);
   });
 
   it("serializes and deserializes snapshot state without data loss", () => {
@@ -33,6 +38,7 @@ describe("CommanderStateSchema", () => {
     state.commander.playerName = "Commander";
     state.commander.selectedLeviathanId = "lev-1";
     state.commander.assetsRemaining.set("Scramble Jets", 2);
+    state.commander.assetCooldowns.set("Scramble Jets", 55_000);
 
     const leviathan = new LeviathanSchema();
     leviathan.id = "lev-1";
@@ -56,7 +62,7 @@ describe("CommanderStateSchema", () => {
     barrier.expiresAt = 200;
     state.activeBarriers.push(barrier);
 
-    state.addSignal("MATCH START", "nominal", "SYSTEM");
+    state.addSignal("MATCH START", "nominal", "SYSTEM", "dispatch-1");
 
     const serialized = state.serializeSnapshot();
     const hydrated = MatchSchema.deserializeSnapshot(serialized);
@@ -66,6 +72,7 @@ describe("CommanderStateSchema", () => {
     expect(hydrated.cityBase.cityName).toBe("Neo Tokyo");
     expect(hydrated.commander.playerName).toBe("Commander");
     expect(hydrated.commander.assetsRemaining.get("Scramble Jets")).toBe(2);
+    expect(hydrated.commander.assetCooldowns.get("Scramble Jets")).toBe(55_000);
     expect(hydrated.leviathans.length).toBe(1);
     expect(hydrated.leviathans[0].id).toBe("lev-1");
     expect(hydrated.dispatchHistory.length).toBe(1);
@@ -73,5 +80,6 @@ describe("CommanderStateSchema", () => {
     expect(hydrated.activeBarriers.length).toBe(1);
     expect(hydrated.signalFeed.length).toBe(1);
     expect(hydrated.signalFeed[0].message).toBe("MATCH START");
+    expect(hydrated.signalFeed[0].dispatchId).toBe("dispatch-1");
   });
 });

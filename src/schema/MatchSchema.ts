@@ -161,6 +161,9 @@ export class SignalFeedEntrySchema extends Schema {
 
   @type("string")
   source: string = ""; // "SYSTEM", "KAIJU_NAME", etc.
+
+  @type("string")
+  dispatchId: string = "";
 }
 
 /**
@@ -217,6 +220,14 @@ export class CommanderStateSchema extends Schema {
     "Raise Barrier": 4,
     "Evac Sector": 2,
   });
+
+  @type({ map: "number" })
+  assetCooldowns = new MapSchema<number>({
+    "Scramble Jets": 0,
+    "Deploy Mechs": 0,
+    "Raise Barrier": 0,
+    "Evac Sector": 0,
+  });
 }
 
 /**
@@ -269,18 +280,57 @@ export class MatchSchema extends Schema {
   /**
    * Helper: Add signal feed entry
    */
-  addSignal(message: string, severity: string = "nominal", source: string = "SYSTEM"): void {
+  addSignal(
+    message: string,
+    severity: string = "nominal",
+    source: string = "SYSTEM",
+    dispatchId: string = ""
+  ): void {
     const entry = new SignalFeedEntrySchema();
     entry.timestamp = this.metadata.now;
     entry.message = message;
     entry.severity = severity;
     entry.source = source;
+    entry.dispatchId = dispatchId;
     this.signalFeed.push(entry);
 
     // Keep signal feed bounded (max 100 entries)
     if (this.signalFeed.length > 100) {
       this.signalFeed.shift();
     }
+  }
+
+  /**
+   * Build a dispatch record with a randomized server-side resolution delay.
+   */
+  createDispatchRecord(assetName: string, targetId: string, dispatchedAt: number): DispatchRecordSchema {
+    const delayMin = GAME_CONSTANTS.ASSET_DELAY_RANGE_MS[0];
+    const delayMax = GAME_CONSTANTS.ASSET_DELAY_RANGE_MS[1];
+    const delayMs = delayMin + Math.floor(Math.random() * (delayMax - delayMin + 1));
+
+    const record = new DispatchRecordSchema();
+    record.id = `${assetName.toLowerCase().replace(/\s+/g, "-")}-${dispatchedAt}-${targetId}`;
+    record.assetName = assetName;
+    record.targetId = targetId;
+    record.dispatchedAt = dispatchedAt;
+    record.resolvedAt = 0;
+    record.outcome = "PENDING";
+    record.delayMs = delayMs;
+    record.applied = false;
+
+    return record;
+  }
+
+  /**
+   * Create a barrier instance for Raise Barrier mitigation effects.
+   */
+  createBarrier(createdAt: number, expiresAt: number): BarrierSchema {
+    const barrier = new BarrierSchema();
+    barrier.id = `barrier-${createdAt}`;
+    barrier.createdAt = createdAt;
+    barrier.expiresAt = expiresAt;
+    barrier.damageAbsorbed = 0;
+    return barrier;
   }
 
   /**
@@ -314,6 +364,7 @@ export class MatchSchema extends Schema {
         playerName: this.commander.playerName,
         selectedLeviathanId: this.commander.selectedLeviathanId,
         assetsRemaining: Object.fromEntries(this.commander.assetsRemaining),
+        assetCooldowns: Object.fromEntries(this.commander.assetCooldowns),
       },
       leviathans: this.leviathans.map((leviathan: LeviathanSchema) => ({
         id: leviathan.id,
@@ -350,6 +401,7 @@ export class MatchSchema extends Schema {
         message: signal.message,
         severity: signal.severity,
         source: signal.source,
+        dispatchId: signal.dispatchId,
       })),
       activeBarriers: this.activeBarriers.map((barrier: BarrierSchema) => ({
         id: barrier.id,
@@ -399,6 +451,10 @@ export class MatchSchema extends Schema {
     for (const [assetName, count] of Object.entries(snapshot.commander.assetsRemaining)) {
       state.commander.assetsRemaining.set(assetName, count);
     }
+    state.commander.assetCooldowns.clear();
+    for (const [assetName, cooldownAt] of Object.entries(snapshot.commander.assetCooldowns)) {
+      state.commander.assetCooldowns.set(assetName, cooldownAt);
+    }
 
     state.leviathans.clear();
     for (const leviathanSnapshot of snapshot.leviathans) {
@@ -445,6 +501,7 @@ export class MatchSchema extends Schema {
       signal.message = signalSnapshot.message;
       signal.severity = signalSnapshot.severity;
       signal.source = signalSnapshot.source;
+      signal.dispatchId = signalSnapshot.dispatchId;
       state.signalFeed.push(signal);
     }
 
@@ -508,6 +565,7 @@ export interface CommanderSnapshot {
   playerName: string;
   selectedLeviathanId: string;
   assetsRemaining: Record<string, number>;
+  assetCooldowns: Record<string, number>;
 }
 
 export interface LeviathanSnapshot {
@@ -547,6 +605,7 @@ export interface SignalFeedEntrySnapshot {
   message: string;
   severity: string;
   source: string;
+  dispatchId: string;
 }
 
 export interface BarrierSnapshot {
