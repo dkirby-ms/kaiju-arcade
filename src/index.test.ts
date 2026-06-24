@@ -55,7 +55,75 @@ describe("API /api/matches", () => {
       graceWindowMs: 30_000,
       optionKey: "reconnectToken",
     });
+    expect(response.body.cityOptions).toEqual([
+      "Neo Tokyo",
+      "New Avalon",
+      "Port Helios",
+      "Glasspoint",
+      "Cinder Bay",
+    ]);
     expect(mockCreate).toHaveBeenCalledWith("match", { cityName: "Neo Tokyo" });
+  });
+
+  it("normalizes valid city names before creating matches", async () => {
+    mockCreate.mockResolvedValue({
+      sessionId: "sess-1",
+      roomId: "room-1",
+      processId: "proc-1",
+      publicAddress: "localhost:3000",
+    });
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches")
+      .send({ cityName: "  new avalon  " });
+
+    expect(response.status).toBe(200);
+    expect(mockCreate).toHaveBeenCalledWith("match", { cityName: "New Avalon" });
+  });
+
+  it("drops invalid cityName and relies on curated fallback behavior", async () => {
+    mockCreate.mockResolvedValue({
+      sessionId: "sess-1",
+      roomId: "room-1",
+      processId: "proc-1",
+      publicAddress: "localhost:3000",
+    });
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches")
+      .send({ cityName: "Unknownopolis" });
+
+    expect(response.status).toBe(200);
+    expect(mockCreate).toHaveBeenCalledWith("match", {});
+    expect(response.body.cityOptions).toEqual([
+      "Neo Tokyo",
+      "New Avalon",
+      "Port Helios",
+      "Glasspoint",
+      "Cinder Bay",
+    ]);
+  });
+
+  it("returns match creation options for city dropdowns", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/api/matches/options");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      cityOptions: [
+        "Neo Tokyo",
+        "New Avalon",
+        "Port Helios",
+        "Glasspoint",
+        "Cinder Bay",
+      ],
+      defaultCity: "Neo Tokyo",
+    });
   });
 
   it("returns 400 when create fails", async () => {

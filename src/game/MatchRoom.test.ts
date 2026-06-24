@@ -71,6 +71,53 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
+  it("rejects join attempts beyond kaiju capacity", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+
+    for (let i = 0; i < 4; i++) {
+      room.onJoin(
+        { id: `client-k-${i + 2}`, sessionId: `session-k-${i + 2}` } as unknown as never,
+        { playerName: `Kaiju ${i + 1}` }
+      );
+    }
+
+    const overflowLeave = jest.fn();
+    room.onJoin(
+      { id: "client-overflow", sessionId: "session-overflow", leave: overflowLeave } as unknown as never,
+      { playerName: "Kaiju Overflow" }
+    );
+
+    const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
+    expect(sessions.size).toBe(5);
+    expect(sessions.has("session-overflow")).toBe(false);
+    expect(overflowLeave).toHaveBeenCalledWith(1008, "No kaiju slot available");
+    expect(room.state.leviathans.filter((leviathan: LeviathanSchema) => !leviathan.isAI).length).toBe(4);
+    expect(broadcast).toHaveBeenCalledWith(
+      "match.join.rejected",
+      expect.objectContaining({
+        type: "match.join.rejected",
+        reason: "capacity",
+        sessionId: "session-overflow",
+      })
+    );
+    expect(
+      room.state.signalFeed.some(
+        (signal: { message: string }) => signal.message === "JOIN REJECTED - MATCH AT CAPACITY"
+      )
+    ).toBe(true);
+
+    room.onDispose();
+  });
+
   it("allows kaiju reconnect reclaim during grace window", () => {
     const room = new MatchRoom();
 

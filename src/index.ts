@@ -11,6 +11,7 @@ import { Server as ColyseusServer } from "colyseus";
 import { matchMaker } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./game/MatchRoom";
+import { getAvailableCities, normalizeRequestedCityName } from "./game/lastStandCities";
 import { getVersionInfo } from "./utils/version";
 
 const app = express();
@@ -38,13 +39,33 @@ app.get("/version", (_req, res) => {
   res.json(getVersionInfo());
 });
 
+// REST API: Match creation options for clients (city dropdown data)
+app.get("/api/matches/options", (_req, res) => {
+  const cities = getAvailableCities();
+  res.json({
+    cityOptions: cities,
+    defaultCity: cities[0],
+  });
+});
+
 // Register match room
 gameServer.define("match", MatchRoom);
 
 // REST API: Create new match
 app.post("/api/matches", async (req, res) => {
   try {
-    const options = req.body || {};
+    const body = (req.body || {}) as Record<string, unknown>;
+    const normalizedCityName = normalizeRequestedCityName(
+      typeof body.cityName === "string" ? body.cityName : undefined
+    );
+    const options: Record<string, unknown> = {
+      ...body,
+      ...(normalizedCityName ? { cityName: normalizedCityName } : {}),
+    };
+
+    if (!normalizedCityName) {
+      delete options.cityName;
+    }
 
     const reservation = await matchMaker.create("match", options as Record<string, unknown>);
 
@@ -61,6 +82,7 @@ app.post("/api/matches", async (req, res) => {
         graceWindowMs: 30_000,
         optionKey: "reconnectToken",
       },
+      cityOptions: getAvailableCities(),
       message: "Match created with seat reservation. Join by roomId/sessionId via Colyseus client.",
     });
   } catch (error) {
