@@ -7,6 +7,7 @@
 
 import express from "express";
 import { createServer } from "http";
+import path from "path";
 import { Server as ColyseusServer } from "colyseus";
 import { matchMaker } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
@@ -28,6 +29,10 @@ const portNum = typeof port === "string" ? parseInt(port, 10) : port;
 
 // Middleware
 app.use(express.json());
+app.use(
+  "/commander",
+  express.static(path.resolve(__dirname, "../public/commander"))
+);
 
 // Health check endpoint
 app.get("/health", (_req, res) => {

@@ -225,6 +225,211 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
+  it("broadcasts signal feed events for commander and kaiju joins", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "signal.feed",
+      expect.objectContaining({
+        type: "signal.feed",
+        message: "COMMANDER COMMANDER ONE ONLINE",
+        severity: "nominal",
+      })
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      "signal.feed",
+      expect.objectContaining({
+        type: "signal.feed",
+        message: expect.stringContaining("PILOT ENGAGED"),
+        severity: "nominal",
+      })
+    );
+
+    room.onDispose();
+  });
+
+  it("records non-zero timestamps for commander join and match start signals", () => {
+    const room = new MatchRoom();
+
+    jest.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+
+    const commanderOnlineSignal = room.state.signalFeed.find(
+      (signal: { message: string }) => signal.message === "COMMANDER COMMANDER ONE ONLINE"
+    );
+    expect(commanderOnlineSignal?.timestamp).toBeGreaterThan(0);
+
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const matchStartSignal = room.state.signalFeed.find(
+      (signal: { message: string }) => signal.message === "MATCH START"
+    );
+    expect(matchStartSignal?.timestamp).toBeGreaterThan(0);
+
+    room.onDispose();
+  });
+
+  it("validates commander dispatch target and cooldown before consuming assets", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const targetLeviathan = room.state.leviathans.find(
+      (leviathan: LeviathanSchema) => leviathan.playerId === "session-2"
+    );
+    expect(targetLeviathan).toBeDefined();
+
+    const initialJetCount = room.state.commander.assetsRemaining.get("Scramble Jets");
+
+    (room as unknown as {
+      handleCommanderDispatch: (assetName: string, targetId: string) => void;
+    }).handleCommanderDispatch("Scramble Jets", "missing-target");
+
+    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe(initialJetCount);
+    expect(
+      room.state.signalFeed.some(
+        (signal: { message: string }) => signal.message === "DISPATCH FAILED: Scramble Jets TARGET INVALID"
+      )
+    ).toBe(true);
+
+    (room as unknown as {
+      handleCommanderDispatch: (assetName: string, targetId: string) => void;
+    }).handleCommanderDispatch("Scramble Jets", targetLeviathan?.id ?? "");
+
+    expect(room.state.dispatchHistory.length).toBe(1);
+    expect(room.state.dispatchHistory[0].assetName).toBe("Scramble Jets");
+    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe((initialJetCount ?? 0) - 1);
+
+    (room as unknown as {
+      handleCommanderDispatch: (assetName: string, targetId: string) => void;
+    }).handleCommanderDispatch("Scramble Jets", targetLeviathan?.id ?? "");
+
+    expect(room.state.dispatchHistory.length).toBe(1);
+    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe((initialJetCount ?? 0) - 1);
+    expect(
+      room.state.signalFeed.some(
+        (signal: { message: string }) => signal.message.includes("DISPATCH FAILED: Scramble Jets COOLDOWN")
+      )
+    ).toBe(true);
+
+    room.onDispose();
+  });
+
+  it("broadcasts commander status payload with cooldown and score state", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "commander.status",
+      expect.objectContaining({
+        type: "commander.status",
+        selectedLeviathanId: "",
+        assetsRemaining: expect.objectContaining({ "Scramble Jets": 5 }),
+        assetCooldownsMsRemaining: expect.any(Object),
+        assetCooldownsReady: expect.any(Object),
+        assetCooldownsProgress: expect.any(Object),
+        commanderScore: 0,
+        cityBaseHp: expect.any(Number),
+      })
+    );
+
+    room.onDispose();
+  });
+
+  it("broadcasts commander dispatch results once and marks records applied", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    const dispatch = room.state.createDispatchRecord("Deploy Mechs", "lev-1", Date.now());
+    dispatch.outcome = "SUCCESS";
+    dispatch.resolvedAt = Date.now();
+    dispatch.applied = false;
+    room.state.dispatchHistory.push(dispatch);
+
+    (room as unknown as { broadcastDispatchResults: () => void }).broadcastDispatchResults();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "commander.dispatch.result",
+      expect.objectContaining({
+        type: "commander.dispatch.result",
+        dispatchId: dispatch.id,
+        outcome: "SUCCESS",
+      })
+    );
+    expect(room.state.dispatchHistory[0].applied).toBe(true);
+
+    const callCountAfterFirstBroadcast = broadcast.mock.calls.length;
+    (room as unknown as { broadcastDispatchResults: () => void }).broadcastDispatchResults();
+    expect(broadcast.mock.calls.length).toBe(callCountAfterFirstBroadcast);
+
+    room.onDispose();
+  });
+
+  it("includes dispatchId in signal.feed payload when signal is dispatch-correlated", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    (room as unknown as {
+      emitSignal: (message: string, severity: "nominal" | "alert" | "critical", source: string, dispatchId?: string) => void;
+    }).emitSignal("DISPATCH: TEST", "nominal", "COMMANDER", "dispatch-xyz");
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "signal.feed",
+      expect.objectContaining({
+        type: "signal.feed",
+        message: "DISPATCH: TEST",
+        dispatchId: "dispatch-xyz",
+      })
+    );
+
+    room.onDispose();
+  });
+
   it("broadcasts normalized result outcomes for all terminal paths", () => {
     const scenarios = [
       { rawOutcome: "KAIJU_VICTORY", expected: "kaiju-victory" },

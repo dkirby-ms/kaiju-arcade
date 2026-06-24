@@ -50,4 +50,43 @@ describe("GameLoop determinism", () => {
     expect(validateTickTiming(180).isValid).toBe(true);
     expect(validateTickTiming(230).isValid).toBe(false);
   });
+
+  it("resolves pending dispatches when delay elapses", () => {
+    const state = buildState();
+    const target = state.leviathans[0];
+    target.hp = 100;
+
+    const dispatch = state.createDispatchRecord("Deploy Mechs", target.id, 1_000);
+    dispatch.delayMs = 0;
+    state.dispatchHistory.push(dispatch);
+
+    executeTick({ state, deltaMs: 200, tickCount: 1, now: 1_200 });
+
+    expect(state.dispatchHistory[0].resolvedAt).toBe(1_200);
+    expect(["SUCCESS", "PARTIAL", "FAILED", "UNVERIFIED"]).toContain(state.dispatchHistory[0].outcome);
+    expect(state.signalFeed.length).toBeGreaterThan(0);
+  });
+
+  it("creates barrier when Raise Barrier dispatch resolves", () => {
+    const state = buildState();
+    const dispatch = state.createDispatchRecord("Raise Barrier", "city-base", 2_000);
+    dispatch.delayMs = 0;
+    state.dispatchHistory.push(dispatch);
+
+    executeTick({ state, deltaMs: 200, tickCount: 2, now: 2_200 });
+
+    expect(state.dispatchHistory[0].outcome).toBe("SUCCESS");
+    expect(state.activeBarriers.length).toBe(1);
+    expect(state.activeBarriers[0].expiresAt).toBe(10_200);
+  });
+
+  it("keeps contained leviathans contained across ticks", () => {
+    const state = buildState();
+    state.leviathans[0].status = "CONTAINED";
+    state.leviathans[0].statusEndTime = 1;
+
+    executeTick({ state, deltaMs: 200, tickCount: 3, now: 5_000 });
+
+    expect(state.leviathans[0].status).toBe("CONTAINED");
+  });
 });

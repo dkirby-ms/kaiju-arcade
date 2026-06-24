@@ -30,6 +30,7 @@ export function executeTick(context: GameLoopContext): void {
 
   updateLeviathanPositions(context);
   processAttacks(context);
+  resolveCommanderDispatches(context);
   updateStatusEffects(context);
   checkWinConditions(context);
 }
@@ -115,8 +116,98 @@ function processAttacks(context: GameLoopContext): void {
     }
   }
 
-  // Process Commander dispatch queue and mitigation
-  // TODO: Implement asset dispatch resolution with delay
+}
+
+function resolveCommanderDispatches(context: GameLoopContext): void {
+  const { state, now } = context;
+
+  for (const dispatch of state.dispatchHistory) {
+    if (dispatch.resolvedAt > 0) {
+      continue;
+    }
+
+    const isReadyToResolve = now - dispatch.dispatchedAt >= dispatch.delayMs;
+    if (!isReadyToResolve) {
+      continue;
+    }
+
+    dispatch.resolvedAt = now;
+
+    switch (dispatch.assetName) {
+      case "Scramble Jets":
+      case "Deploy Mechs": {
+        const target = state.getLeviathan(dispatch.targetId);
+        if (!target || target.status === "CONTAINED") {
+          dispatch.outcome = "UNVERIFIED";
+          state.addSignal(
+            `MITIGATION UNVERIFIED - ${dispatch.assetName} TARGET LOST`,
+            "alert",
+            "SYSTEM",
+            dispatch.id
+          );
+          break;
+        }
+
+        const roll = deterministicRoll(dispatch.id, now);
+        const profile = dispatch.assetName === "Scramble Jets"
+          ? { success: 0.65, partial: 0.2, maxDamage: 40 }
+          : { success: 0.55, partial: 0.25, maxDamage: 30 };
+
+        if (roll <= profile.success) {
+          dispatch.outcome = "SUCCESS";
+          applyMitigationDamage(state, target.id, profile.maxDamage, now, dispatch.id);
+          state.metadata.commanderScore += 20;
+          state.addSignal(
+            `${dispatch.assetName.toUpperCase()} SUCCESS - ${target.name} CONTAINMENT HIT`,
+            "nominal",
+            "SYSTEM",
+            dispatch.id
+          );
+        } else if (roll <= profile.success + profile.partial) {
+          dispatch.outcome = "PARTIAL";
+          applyMitigationDamage(state, target.id, Math.round(profile.maxDamage * 0.5), now, dispatch.id);
+          state.metadata.commanderScore += 8;
+          state.addSignal(
+            `${dispatch.assetName.toUpperCase()} PARTIAL - ${target.name} REPULSED`,
+            "alert",
+            "SYSTEM",
+            dispatch.id
+          );
+        } else {
+          dispatch.outcome = "FAILED";
+          state.addSignal(
+            `${dispatch.assetName.toUpperCase()} FAILED - ${target.name} EVADED`,
+            "critical",
+            "SYSTEM",
+            dispatch.id
+          );
+        }
+
+        break;
+      }
+
+      case "Raise Barrier": {
+        const barrier = state.createBarrier(now, now + 8_000);
+        state.activeBarriers.push(barrier);
+        dispatch.outcome = "SUCCESS";
+        state.metadata.commanderScore += 5;
+        state.addSignal("RAISE BARRIER ONLINE - CITY BASE SHIELDED", "nominal", "SYSTEM", dispatch.id);
+        break;
+      }
+
+      case "Evac Sector": {
+        dispatch.outcome = "SUCCESS";
+        state.metadata.commanderScore += 12;
+        state.addSignal("EVAC SECTOR SUCCESS - CIVILIANS RELOCATED", "nominal", "SYSTEM", dispatch.id);
+        break;
+      }
+
+      default:
+        dispatch.outcome = "UNVERIFIED";
+        state.addSignal("MITIGATION UNVERIFIED - UNKNOWN ASSET", "alert", "SYSTEM", dispatch.id);
+        break;
+    }
+  }
 }
 
 /**
@@ -126,7 +217,11 @@ function updateStatusEffects(context: GameLoopContext): void {
   const { state, now } = context;
 
   for (const leviathan of state.leviathans) {
-    if (leviathan.status !== "ACTIVE" && now >= leviathan.statusEndTime) {
+    if (
+      leviathan.status !== "ACTIVE" &&
+      leviathan.status !== "CONTAINED" &&
+      now >= leviathan.statusEndTime
+    ) {
       // Status effect expired
       leviathan.status = "ACTIVE";
     }
@@ -145,6 +240,40 @@ function updateStatusEffects(context: GameLoopContext): void {
   for (let i = barriersToRemove.length - 1; i >= 0; i--) {
     state.activeBarriers.splice(barriersToRemove[i], 1);
   }
+}
+
+function applyMitigationDamage(
+  state: MatchSchema,
+  targetId: string,
+  damage: number,
+  now: number,
+  dispatchId: string
+): void {
+  const target = state.getLeviathan(targetId);
+  if (!target || target.status === "CONTAINED") {
+    return;
+  }
+
+  target.hp = Math.max(0, target.hp - damage);
+  target.damageReceived += damage;
+
+  if (target.hp <= 0) {
+    target.status = "CONTAINED";
+    target.statusEndTime = now;
+    state.addSignal(`KAIJU ${target.name} CONTAINED`, "nominal", "SYSTEM", dispatchId);
+  }
+}
+
+function deterministicRoll(seed: string, now: number): number {
+  const input = `${seed}:${Math.floor(now / GAME_CONSTANTS.TICK_MS)}`;
+  let hash = 2166136261;
+
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return ((hash >>> 0) % 1000) / 1000;
 }
 
 /**
