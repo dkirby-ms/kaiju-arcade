@@ -287,7 +287,7 @@ export class MatchSchema extends Schema {
     dispatchId: string = ""
   ): void {
     const entry = new SignalFeedEntrySchema();
-    entry.timestamp = this.metadata.now;
+    entry.timestamp = this.metadata.now > 0 ? this.metadata.now : Date.now();
     entry.message = message;
     entry.severity = severity;
     entry.source = source;

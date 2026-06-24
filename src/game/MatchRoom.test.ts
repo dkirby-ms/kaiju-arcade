@@ -260,6 +260,35 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
+  it("records non-zero timestamps for commander join and match start signals", () => {
+    const room = new MatchRoom();
+
+    jest.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+
+    const commanderOnlineSignal = room.state.signalFeed.find(
+      (signal: { message: string }) => signal.message === "COMMANDER COMMANDER ONE ONLINE"
+    );
+    expect(commanderOnlineSignal?.timestamp).toBeGreaterThan(0);
+
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const matchStartSignal = room.state.signalFeed.find(
+      (signal: { message: string }) => signal.message === "MATCH START"
+    );
+    expect(matchStartSignal?.timestamp).toBeGreaterThan(0);
+
+    room.onDispose();
+  });
+
   it("validates commander dispatch target and cooldown before consuming assets", () => {
     const room = new MatchRoom();
 

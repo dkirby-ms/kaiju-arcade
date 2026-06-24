@@ -82,4 +82,14 @@ describe("CommanderStateSchema", () => {
     expect(hydrated.signalFeed[0].message).toBe("MATCH START");
     expect(hydrated.signalFeed[0].dispatchId).toBe("dispatch-1");
   });
+
+  it("falls back to Date.now for signal timestamps before first tick", () => {
+    const state = new MatchSchema();
+
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(987_654_321);
+    state.addSignal("COMMANDER ONLINE", "nominal", "SYSTEM");
+    nowSpy.mockRestore();
+
+    expect(state.signalFeed[0].timestamp).toBe(987_654_321);
+  });
 });

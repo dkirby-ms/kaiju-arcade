@@ -79,4 +79,14 @@ describe("GameLoop determinism", () => {
     expect(state.activeBarriers.length).toBe(1);
     expect(state.activeBarriers[0].expiresAt).toBe(10_200);
   });
+
+  it("keeps contained leviathans contained across ticks", () => {
+    const state = buildState();
+    state.leviathans[0].status = "CONTAINED";
+    state.leviathans[0].statusEndTime = 1;
+
+    executeTick({ state, deltaMs: 200, tickCount: 3, now: 5_000 });
+
+    expect(state.leviathans[0].status).toBe("CONTAINED");
+  });
 });

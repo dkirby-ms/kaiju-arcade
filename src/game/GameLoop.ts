@@ -217,7 +217,11 @@ function updateStatusEffects(context: GameLoopContext): void {
   const { state, now } = context;
 
   for (const leviathan of state.leviathans) {
-    if (leviathan.status !== "ACTIVE" && now >= leviathan.statusEndTime) {
+    if (
+      leviathan.status !== "ACTIVE" &&
+      leviathan.status !== "CONTAINED" &&
+      now >= leviathan.statusEndTime
+    ) {
       // Status effect expired
       leviathan.status = "ACTIVE";
     }
