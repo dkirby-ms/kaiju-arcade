@@ -66,9 +66,23 @@ interface ReconnectTokenPayload {
   graceWindowMs: number;
 }
 
+interface JoinRejectionTelemetry {
+  type: "match.join.rejected";
+  reason: "capacity";
+  matchId: string;
+  clientId: string;
+  sessionId: string;
+  timestamp: number;
+}
+
+interface RejectionCapableClient {
+  leave?: (code?: number, reason?: string) => void;
+}
+
 export class MatchRoom extends Room<MatchSchema> {
   private static readonly MAX_KAIJU_SLOTS = 4;
   private static readonly RECONNECT_GRACE_MS = 30_000;
+  private static readonly ROOM_FULL_CLOSE_CODE = 1008;
 
   private playerSessions: Map<string, PlayerSession> = new Map();
   private reconnectGraceWindows: Map<string, ReconnectGraceWindow> = new Map();
@@ -154,6 +168,8 @@ export class MatchRoom extends Room<MatchSchema> {
         this.claimKaijuSlot(client.sessionId, playerName);
       if (!leviathan) {
         console.warn("No kaiju slot available for joining player");
+        this.emitJoinRejectionTelemetry(client, "capacity");
+        this.rejectJoin(client, "No kaiju slot available");
         return;
       }
 
@@ -172,6 +188,31 @@ export class MatchRoom extends Room<MatchSchema> {
     ) {
       this.startMatch();
     }
+  }
+
+  private rejectJoin(client: Client, reason: string) {
+    const rejectionClient = client as unknown as RejectionCapableClient;
+    if (typeof rejectionClient.leave === "function") {
+      rejectionClient.leave(MatchRoom.ROOM_FULL_CLOSE_CODE, reason);
+    }
+  }
+
+  private emitJoinRejectionTelemetry(client: Client, reason: "capacity") {
+    const telemetry: JoinRejectionTelemetry = {
+      type: "match.join.rejected",
+      reason,
+      matchId: this.state.metadata.matchId,
+      clientId: client.id,
+      sessionId: client.sessionId,
+      timestamp: Date.now(),
+    };
+
+    if (typeof this.broadcast === "function") {
+      this.broadcast("match.join.rejected", telemetry);
+    }
+
+    this.state.addSignal("JOIN REJECTED - MATCH AT CAPACITY", "alert", "SYSTEM");
+    console.warn(JSON.stringify(telemetry));
   }
 
   onLeave(client: Client, code?: number) {
