@@ -1,0 +1,50 @@
+{
+  "name": "kaiju-arcade",
+  "version": "0.1.0",
+  "description": "Kaiju Arcade - Asymmetric local multiplayer game",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "clean": "rm -rf dist",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint src --ext .ts",
+    "version:patch": "semver patch $(node -e \"console.log(require('./package.json').version)\") | xargs -I {} npm version {}",
+    "version:minor": "semver minor $(node -e \"console.log(require('./package.json').version)\") | xargs -I {} npm version {}",
+    "version:major": "semver major $(node -e \"console.log(require('./package.json').version)\") | xargs -I {} npm version {}"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "arcade",
+    "kaiju"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "colyseus": "^0.17.0",
+    "express": "^4.21.1",
+    "semver": "^7.6.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.3"
+  }
+}
