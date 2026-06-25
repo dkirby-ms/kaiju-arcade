@@ -35,9 +35,9 @@ const portNum = config.PORT;
 const hostname = config.HOST;
 
 // Middleware
-app.use(express.json());
 app.use(requestLogger);
 app.use(createNodeMatchmakingMiddleware() as unknown as express.RequestHandler);
+app.use(express.json());
 app.use(
   "/commander",
   express.static(path.resolve(__dirname, "../public/commander"))
@@ -354,7 +354,7 @@ app.post("/api/matches/:roomId/:action", async (req, res) => {
 });
 
 export function startServer() {
-  return httpServer.listen(portNum, hostname as string, () => {
+  return gameServer.listen(portNum, hostname as string, undefined, () => {
     const version = getVersionInfo();
     logger.info("server started", { host: hostname, port: portNum, version: version.version });
   });

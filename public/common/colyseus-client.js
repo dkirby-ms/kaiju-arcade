@@ -1,14 +1,14 @@
 (function attachColyseusClient(global) {
   const RECONNECT_ROOM_NAME = "match";
-  const REST_LOBBY_POLL_MS = 2000;
-  const LOBBY_NATIVE_JOIN_TIMEOUT_MS = 3500;
   const METRIC_EVENT_NAME = "kaiju.colyseus.client.metric";
+  const LOBBY_JOIN_TIMEOUT_MS = 12000;
 
   function initializeColyseusClient() {
     function getColyseusNamespace() {
       const namespace = global.colyseus || global.Colyseus;
 
       if (!namespace || !namespace.Client) {
+        console.error("Colyseus namespace not found. Available globals:", Object.keys(global).filter(k => k.includes('olyseus') || k.includes('OLYSEUS')));
         throw new Error("Colyseus client library is not loaded.");
       }
 
@@ -21,102 +21,37 @@
     }
 
     function createClient() {
-      // Try to create a real Colyseus client if available
+      // Always create a real Colyseus client; fail fast if not available
       try {
         const Colyseus = getColyseusNamespace();
-        return new Colyseus.Client(getWsEndpoint());
-      } catch (e) {
-        // Return a stub client for REST-only mode with polling
-        return {
-          create: async () => {
-            throw new Error("WebSocket client not available, use REST API");
-          },
-          consumeSeatReservation: async (reservation) => {
-            // Create a mock room that polls for updates
-            let disposed = false;
-            let pollTimer = null;
-            const listeners = new Map();
-            const roomId = reservation?.roomId || reservation?.room?.roomId;
-            const sessionId = reservation?.sessionId || reservation?.room?.sessionId || "";
-            
-            const mockRoom = {
-              sessionId,
-              roomId,
-              id: roomId,
-              reconnectionToken: sessionId,
-              state: {
-                commander: null,
-                leviathans: [],
-                metadata: { state: "WAITING" },
-              },
-              listeners,
-              onMessage: function(type, handler) {
-                if (!this.listeners.has(type)) {
-                  this.listeners.set(type, []);
-                }
-                this.listeners.get(type).push(handler);
-              },
-              send: function(type, data) {
-                // Send via HTTP REST API instead of WebSocket
-                const path = type.replace(/\./g, '/');
-                const endpoint = `/api/matches/${this.roomId}/${path}`;
-                fetch(endpoint, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(data || {})
-                }).catch(err => console.error('Failed to send action:', type, err));
-              },
-              _pollState: async function() {
-                if (disposed) return;
-                try {
-                  const response = await fetch(`/api/matches/${this.roomId}`, { method: 'GET' });
-                  if (!response.ok) return;
-                  const data = await response.json();
-                  if (data && data.room) {
-                    this.state = data.room.state || this.state;
-                  }
-                } catch (err) {
-                  console.warn('Room state poll failed:', err);
-                } finally {
-                  if (!disposed) {
-                    pollTimer = setTimeout(() => this._pollState(), 1000);
-                  }
-                }
-              },
-              leave: async function() {
-                disposed = true;
-                if (pollTimer) clearTimeout(pollTimer);
-              }
-            };
-            
-            // Start polling for state updates
-            mockRoom._pollState();
-            
-            return mockRoom;
-          }
-        };
+        const endpoint = getWsEndpoint();
+        console.log("Creating Colyseus client for:", endpoint);
+        const client = new Colyseus.Client(endpoint);
+
+        // Some SDK builds expose room-level signals only (no client.onError/onClose).
+        // Keep diagnostics best-effort without assuming optional client APIs.
+        if (typeof client.onError === "function") {
+          client.onError((error) => {
+            console.error("Colyseus client error event:", {
+              message: error?.message,
+              code: error?.code,
+              type: error?.type,
+            });
+          });
+        }
+
+        if (typeof client.onClose === "function") {
+          client.onClose(() => {
+            console.warn("Colyseus client closed");
+          });
+        }
+        
+        console.log("Colyseus client created successfully");
+        return client;
+      } catch (error) {
+        console.error("Failed to create Colyseus client:", error?.message);
+        throw error;
       }
-    }
-
-    function normalizeErrorMessage(error) {
-      if (!error) {
-        return "";
-      }
-
-      if (error instanceof Error) {
-        return error.message || "";
-      }
-
-      if (typeof error === "string") {
-        return error;
-      }
-
-      return String(error?.message || "");
-    }
-
-    function shouldUseRestFallback(error) {
-      const message = normalizeErrorMessage(error).toLowerCase();
-      return message.includes("/matchmake/") || message.includes("404") || message.includes("not found") || message.includes("failed to fetch");
     }
 
     function emitClientMetric(type, labels) {
@@ -131,24 +66,6 @@
       } catch {
         // Browser compatibility and telemetry safety: metric events must never break gameplay.
       }
-    }
-
-    function withTimeout(promise, timeoutMs, message) {
-      return new Promise((resolve, reject) => {
-        const timeoutHandle = global.setTimeout(() => {
-          reject(new Error(message || "Operation timed out."));
-        }, timeoutMs);
-
-        Promise.resolve(promise)
-          .then((value) => {
-            global.clearTimeout(timeoutHandle);
-            resolve(value);
-          })
-          .catch((error) => {
-            global.clearTimeout(timeoutHandle);
-            reject(error);
-          });
-      });
     }
 
     async function postJson(path, payload) {
@@ -211,14 +128,10 @@
       }
     }
 
+    // REST API endpoints for match reservation (intentional, not fallback)
     async function createMatchReservationViaRest(options) {
       const reservation = await postJson("/api/matches", options || {});
       return reservation;
-    }
-
-    async function createMatchViaRest(client, options) {
-      const reservation = await createMatchReservationViaRest(options);
-      return consumeSeatReservation(client, reservation);
     }
 
     async function joinMatchReservationViaRest(roomId, options) {
@@ -232,128 +145,61 @@
       }
     }
 
-    async function joinMatchViaRest(client, roomId, options) {
-      const reservation = await joinMatchReservationViaRest(roomId, options);
-      return consumeSeatReservation(client, reservation);
-    }
-
-    function createRestLobbyRoom() {
-      const handlersByType = new Map();
-      let pollTimer = 0;
-      let disposed = false;
-      let roomsById = new Map();
-
-      function registerHandler(type, handler) {
-        if (!handlersByType.has(type)) {
-          handlersByType.set(type, []);
-        }
-
-        handlersByType.get(type).push(handler);
-      }
-
-      function emit(type, payload) {
-        const handlers = handlersByType.get(type) || [];
-        handlers.forEach((handler) => {
-          if (typeof handler === "function") {
-            handler(payload);
-          }
-        });
-      }
-
-      async function poll() {
-        if (disposed) {
-          return;
-        }
-
-        try {
-          const response = await fetch("/api/matches", { method: "GET" });
-          if (!response.ok) {
-            throw new Error(`Failed to load matches: ${response.status}`);
-          }
-
-          const payload = await response.json();
-          const nextRooms = new Map();
-
-          (Array.isArray(payload?.matches) ? payload.matches : []).forEach((room) => {
-            const normalized = normalizeLobbyRoom(room?.roomId, room);
-            if (normalized.roomId) {
-              nextRooms.set(normalized.roomId, normalized);
-            }
-          });
-
-          emit("rooms", Array.from(nextRooms.values()));
-
-          nextRooms.forEach((room, roomId) => {
-            const previous = roomsById.get(roomId);
-            if (!previous || JSON.stringify(previous) !== JSON.stringify(room)) {
-              emit("+", [roomId, room]);
-            }
-          });
-
-          roomsById.forEach((_room, roomId) => {
-            if (!nextRooms.has(roomId)) {
-              emit("-", roomId);
-            }
-          });
-
-          roomsById = nextRooms;
-        } finally {
-          if (!disposed) {
-            pollTimer = global.setTimeout(poll, REST_LOBBY_POLL_MS);
-          }
-        }
-      }
-
-      poll();
-
-      return {
-        onMessage(type, handler) {
-          registerHandler(type, handler);
-        },
-        leave() {
-          disposed = true;
-          if (pollTimer) {
-            global.clearTimeout(pollTimer);
-          }
-          return Promise.resolve();
-        },
-      };
+    // Pure Colyseus-only operations (no fallback)
+    function createLobbyTimeoutError(timeoutMs) {
+      return new Error(
+        `Lobby connection timed out after ${timeoutMs}ms. Ensure the server is running at ${getWsEndpoint()}.`
+      );
     }
 
     async function joinLobby(client, options) {
-      if (typeof client.joinOrCreate === "function") {
-        try {
-          const lobbyRoom = await withTimeout(
-            client.joinOrCreate("lobby", options || {}),
-            LOBBY_NATIVE_JOIN_TIMEOUT_MS,
-            "Native lobby join timed out."
-          );
-          emitClientMetric("lobby.join.path", { path: "native" });
-          return lobbyRoom;
-        } catch (error) {
-          if (!shouldUseRestFallback(error)) {
-            const normalizedMessage = normalizeErrorMessage(error).toLowerCase();
-            if (!normalizedMessage.includes("timed out")) {
-              throw error;
-            }
-          }
-        }
-      }
+      emitClientMetric("lobby.join.attempt", {});
+      console.log("Attempting to join lobby. Client state:", {
+        hasClient: !!client,
+        clientState: client?.state,
+        clientId: client?.id,
+        options,
+      });
 
-      emitClientMetric("lobby.join.path", { path: "rest" });
-      return createRestLobbyRoom();
+      console.log("Calling joinOrCreate...");
+      const joinPromise = client.joinOrCreate("lobby", options || {});
+
+      let timeoutId = null;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const timeoutError = createLobbyTimeoutError(LOBBY_JOIN_TIMEOUT_MS);
+          console.error("Lobby join timeout:", timeoutError.message);
+          emitClientMetric("lobby.join.timeout", { durationMs: LOBBY_JOIN_TIMEOUT_MS });
+          reject(timeoutError);
+        }, LOBBY_JOIN_TIMEOUT_MS);
+      });
+
+      try {
+        const lobbyRoom = await Promise.race([joinPromise, timeoutPromise]);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        console.log("Lobby room created/joined successfully:", { roomId: lobbyRoom?.roomId });
+        emitClientMetric("lobby.join.success", {});
+        return lobbyRoom;
+      } catch (error) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+
+        console.error("Lobby join failed:", {
+          message: error?.message,
+          code: error?.code,
+          type: error?.type,
+          errorStack: error?.stack?.split("\n").slice(0, 5).join("\n"),
+        });
+        emitClientMetric("lobby.join.error", { reason: error?.message || "unknown" });
+        throw error;
+      }
     }
 
     async function createMatch(client, options) {
-      try {
-        return await client.create(RECONNECT_ROOM_NAME, options || {});
-      } catch (error) {
-        if (!shouldUseRestFallback(error)) {
-          throw error;
-        }
-
-        return createMatchViaRest(client, options || {});
-      }
+      return await client.create(RECONNECT_ROOM_NAME, options || {});
     }
 
     async function joinMatchById(client, roomId, options) {
@@ -361,7 +207,7 @@
         throw new Error("roomId is required to join a match.");
       }
 
-      return joinMatchViaRest(client, roomId, options || {});
+      return await client.joinById(roomId, options || {});
     }
 
     function normalizeLobbyRoom(roomId, roomData) {
@@ -453,6 +299,6 @@
     };
   }
 
-  // Initialize the Colyseus client API immediately (no external library needed)
+  // Initialize the Colyseus client API immediately
   initializeColyseusClient();
 })(window);

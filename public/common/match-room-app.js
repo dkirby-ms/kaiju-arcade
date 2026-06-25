@@ -101,6 +101,43 @@
     return getParticipants().find((participant) => participant.sessionId === state.room.sessionId) || null;
   }
 
+  function deriveClaimedRoleFromRoomState() {
+    if (!state.room?.state) {
+      return {
+        role: "",
+        leviathanId: "",
+      };
+    }
+
+    if (state.room.state.commander?.playerId === state.room.sessionId) {
+      return {
+        role: "COMMANDER",
+        leviathanId: "",
+      };
+    }
+
+    let ownedLeviathanId = "";
+    if (state.room.state.leviathans) {
+      state.room.state.leviathans.forEach((leviathan) => {
+        if (leviathan.playerId === state.room.sessionId) {
+          ownedLeviathanId = leviathan.id;
+        }
+      });
+    }
+
+    if (ownedLeviathanId) {
+      return {
+        role: "KAIJU",
+        leviathanId: ownedLeviathanId,
+      };
+    }
+
+    return {
+      role: "",
+      leviathanId: "",
+    };
+  }
+
   function renderRoster() {
     const participants = getParticipants();
     elements.participantList.innerHTML = "";
@@ -135,8 +172,10 @@
 
   function syncDerivedState() {
     const selfParticipant = getSelfParticipant();
-    state.claimedRole = selfParticipant?.claimedRole || "";
-    state.claimedLeviathanId = selfParticipant?.leviathanId || "";
+    const derivedRoleState = deriveClaimedRoleFromRoomState();
+
+    state.claimedRole = selfParticipant?.claimedRole || derivedRoleState.role;
+    state.claimedLeviathanId = selfParticipant?.leviathanId || derivedRoleState.leviathanId;
     state.ready = Boolean(selfParticipant?.ready);
     state.phase = state.room?.state?.metadata?.state || state.phase;
 
@@ -205,12 +244,17 @@
     state.pendingRedirect = true;
     setStatus(`Match active. Routing to ${activeSession.role} client...`);
 
-    try {
-      if (state.room) {
-        await state.room.leave(false);
-      }
-    } catch {
-      // best-effort room detach before transition
+    if (state.room) {
+      // Do not block navigation on leave(); some clients can hang waiting for socket teardown.
+        const leavePromise = Promise.resolve(state.room.leave(false));
+        await Promise.race([
+          leavePromise,
+          new Promise((resolve) => {
+            global.setTimeout(resolve, 300);
+          }),
+        ]).catch(() => {
+          // Best-effort room detach before transition.
+        });
     }
 
     global.location.assign(activeSession.role === "commander" ? "/commander/index.html" : "/kaiju/index.html");
@@ -220,7 +264,7 @@
     state.phase = "ACTIVE";
     syncDerivedState();
     appendFeed("Match active.", "nominal");
-    redirectToActiveClient();
+      void redirectToActiveClient();
   }
 
   function bindRoom(room) {
