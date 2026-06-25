@@ -26,6 +26,7 @@ jest.mock("colyseus", () => {
 import { MatchRoom } from "./MatchRoom";
 import { lastStandCities } from "./lastStandCities";
 import { LeviathanSchema } from "../schema/MatchSchema";
+import { startDrain, resetDrainState } from "../ops/runtime-state";
 
 function sendClientMessage(
   room: MatchRoom,
@@ -998,6 +999,203 @@ describe("MatchRoom role assignment", () => {
         (signal: { message: string }) => signal.message === "MATCH START REJECTED - ALL PLAYERS MUST BE READY"
       )
     ).toBe(true);
+
+    room.onDispose();
+  });
+});
+
+describe("MatchRoom drain and capacity resilience", () => {
+  beforeEach(() => {
+    resetDrainState();
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    resetDrainState();
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  it("rejects new join during drain (non-reconnect)", () => {
+    const room = new MatchRoom();
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    startDrain(30_000);
+
+    const leaveCall = jest.fn();
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1", leave: leaveCall } as unknown as never,
+      { playerName: "New Player" }
+    );
+
+    const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
+    expect(sessions.has("session-1")).toBe(false);
+    expect(leaveCall).toHaveBeenCalledWith(1013, expect.any(String));
+
+    room.onDispose();
+  });
+
+  it("allows reconnect during drain", () => {
+    const room = new MatchRoom();
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
+    );
+
+    const kaijuSlot = room.state.leviathans.find(
+      (leviathan: LeviathanSchema) => leviathan.playerId === "session-2"
+    );
+    expect(kaijuSlot).toBeDefined();
+
+    room.onLeave(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      1006
+    );
+
+    const reconnectToken = (
+      room as unknown as { reconnectTokenByLeviathanId: Map<string, string> }
+    ).reconnectTokenByLeviathanId.get(kaijuSlot?.id ?? "");
+    expect(reconnectToken).toBeDefined();
+
+    startDrain(30_000);
+
+    room.onJoin(
+      { id: "client-3", sessionId: "session-3" } as unknown as never,
+      { playerName: "Kaiju One", reconnectToken }
+    );
+
+    expect(kaijuSlot?.playerId).toBe("session-3");
+    expect(kaijuSlot?.isAI).toBe(false);
+
+    room.onDispose();
+  });
+
+  it("rejects join when room is at capacity", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    // Fill commander and all 4 kaiju slots (maxClients = 5)
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+    for (let i = 0; i < 4; i++) {
+      room.onJoin(
+        { id: `client-k-${i + 2}`, sessionId: `session-k-${i + 2}` } as unknown as never,
+        { playerName: `Kaiju ${i + 1}`, playerRole: "KAIJU" }
+      );
+    }
+
+    const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
+    expect(sessions.size).toBe(5);
+
+    // Attempt to join as kaiju when all slots are full
+    const kaijuOverflowLeave = jest.fn();
+    room.onJoin(
+      { id: "client-overflow", sessionId: "session-overflow", leave: kaijuOverflowLeave } as unknown as never,
+      { playerName: "Overflow Kaiju", playerRole: "KAIJU" }
+    );
+    expect(sessions.size).toBe(5);
+    expect(sessions.has("session-overflow")).toBe(false);
+    expect(kaijuOverflowLeave).toHaveBeenCalledWith(1008, "No kaiju slot available");
+
+    // Attempt to join as commander when slot is already taken
+    const commanderOverflowLeave = jest.fn();
+    room.onJoin(
+      { id: "client-overflow-2", sessionId: "session-overflow-2", leave: commanderOverflowLeave } as unknown as never,
+      { playerName: "Overflow Commander", playerRole: "COMMANDER" }
+    );
+    expect(sessions.size).toBe(5);
+    expect(sessions.has("session-overflow-2")).toBe(false);
+    expect(commanderOverflowLeave).toHaveBeenCalledWith(1008, "Commander slot already taken");
+
+    room.onDispose();
+  });
+
+  it("expired/missing reconnect token falls back to new join", () => {
+    const room = new MatchRoom();
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+
+    // Attempt reconnect with an invalid token; should not crash
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Returning Player", reconnectToken: "invalid-token-xyz" }
+    );
+
+    const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
+
+    // Player is added as an unassigned participant (no crash, no bad state)
+    expect(sessions.has("session-2")).toBe(true);
+
+    // No kaiju slot was claimed via the invalid token
+    const anySlotClaimed = room.state.leviathans.some(
+      (leviathan: LeviathanSchema) => leviathan.playerId === "session-2"
+    );
+    expect(anySlotClaimed).toBe(false);
+
+    // Commander slot was not hijacked by invalid token
+    expect(room.state.commander.playerId).toBe("session-1");
+
+    room.onDispose();
+  });
+
+  it("keeps active room alive during start-match handoff disconnects", () => {
+    const room = new MatchRoom();
+    const disconnectSpy = jest.fn();
+    (room as unknown as { disconnect: typeof disconnectSpy }).disconnect = disconnectSpy;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
+    );
+
+    setReady(room, "session-1", true);
+    setReady(room, "session-2", true);
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart({ sessionId: "session-1" });
+
+    expect(room.state.metadata.state).toBe("ACTIVE");
+
+    // Simulate intentional client transition to role pages (normal close code 1000).
+    room.onLeave(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      1000
+    );
+    room.onLeave(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      1000
+    );
+
+    const internalState = room as unknown as {
+      reconnectGraceWindows: Map<string, unknown>;
+      commanderReconnectWindow?: unknown;
+    };
+
+    expect(internalState.commanderReconnectWindow).toBeDefined();
+    expect(internalState.reconnectGraceWindows.size).toBeGreaterThan(0);
+    expect(disconnectSpy).not.toHaveBeenCalled();
 
     room.onDispose();
   });

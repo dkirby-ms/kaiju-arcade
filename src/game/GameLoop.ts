@@ -13,6 +13,7 @@
  */
 
 import { MatchSchema, GAME_CONSTANTS } from "../schema/MatchSchema";
+import { observeHistogram } from "../ops/metrics";
 
 export interface GameLoopContext {
   state: MatchSchema;
@@ -26,6 +27,8 @@ export interface GameLoopContext {
  * Called at 20 Hz (every 50ms)
  */
 export function executeTick(context: GameLoopContext): void {
+  const tickStart = Date.now();
+
   // Order matters: positions → attacks → damage → effects → cleanup
 
   updateLeviathanPositions(context);
@@ -34,6 +37,8 @@ export function executeTick(context: GameLoopContext): void {
   processKaijuAbilities(context);
   updateStatusEffects(context);
   checkWinConditions(context);
+
+  observeHistogram("kaiju_tick_duration_ms", Date.now() - tickStart);
 }
 
 /**

@@ -1,0 +1,73 @@
+# Prometheus alert rules — Alertmanager compatible
+# Runbook references point to docs/operations/runbooks/
+groups:
+  - name: kaiju-arcade-service
+    rules:
+      - alert: HighJoinFailureRate
+        expr: >
+          rate(kaiju_join_total{outcome="failure"}[5m])
+          / rate(kaiju_join_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Join failure rate above 5%"
+          description: >
+            More than 5% of join attempts have failed over the past 5 minutes.
+            Check for matchMaker errors, capacity limits, or downstream timeouts.
+          runbook: "docs/operations/runbooks/join-failure.md"
+
+      - alert: TickDurationHigh
+        expr: >
+          histogram_quantile(0.95, rate(kaiju_tick_duration_ms_bucket[5m])) > 75
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Game loop p95 tick duration above 75 ms"
+          description: >
+            The 95th-percentile game-loop tick duration has exceeded 75 ms for
+            3 minutes. Tick budget is 50 ms at 20 Hz. Sustained lag degrades
+            player experience and may indicate CPU pressure.
+          runbook: "docs/operations/runbooks/tick-lag-drift.md"
+
+      - alert: TickDurationCritical
+        expr: >
+          histogram_quantile(0.99, rate(kaiju_tick_duration_ms_bucket[5m])) > 100
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Game loop p99 tick duration above 100 ms (2× budget)"
+          description: >
+            The 99th-percentile tick duration has exceeded 100 ms — double the
+            50 ms budget. Active matches are likely experiencing severe lag.
+            Consider emergency drain and failover.
+          runbook: "docs/operations/runbooks/tick-lag-drift.md"
+
+      - alert: DisconnectSpike
+        expr: >
+          rate(kaiju_disconnect_total{code="abrupt"}[5m])
+          > 2 * rate(kaiju_disconnect_total{code="abrupt"}[30m])
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Abrupt disconnect rate spike detected"
+          description: >
+            The abrupt disconnect rate over the last 5 minutes is more than
+            double the 30-minute baseline. This may indicate network issues,
+            server-side errors, or a client bug causing mass drops.
+          runbook: "docs/operations/runbooks/reconnect-storm.md"
+
+      - alert: NoActivePlayers
+        expr: kaiju_active_players == 0 and kaiju_active_rooms > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Active rooms with no connected players"
+          description: >
+            There are active match rooms but zero connected players for 5 minutes.
+            Rooms may be stuck in a non-disposable state. Check autoDispose logic.
+          runbook: "docs/operations/runbooks/match-start-deadlock.md"

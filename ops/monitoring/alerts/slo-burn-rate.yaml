@@ -1,0 +1,106 @@
+# slo-burn-rate.yaml
+# Prometheus alerting rules for SLO error-budget burn rates.
+# See docs/operations/alerts.md and docs/operations/slo-policy.md for
+# threshold rationale and escalation paths.
+#
+# Deploy to your Prometheus rule files directory and reload Prometheus.
+
+groups:
+  - name: kaiju_arcade_slo_burn_rates
+    rules:
+
+      # -----------------------------------------------------------------------
+      # SLO-A: Join Success Rate
+      # Target: >= 99.5% over a 30-day rolling window (0.5% error budget)
+      # -----------------------------------------------------------------------
+
+      # Critical: 2x burn rate over 1 hour
+      # A 2x burn means we are consuming the 30-day budget at twice the
+      # sustainable rate. If sustained, the budget exhausts in ~15 days.
+      - alert: SloAJoinSuccessRateCritical
+        expr: |
+          (
+            sum(rate(kaiju_join_total{outcome="failure"}[1h]))
+            /
+            sum(rate(kaiju_join_total[1h]))
+          ) > (2 * 0.005)
+        for: 5m
+        labels:
+          severity: critical
+          slo: slo-a
+          team: kaiju-ops
+        annotations:
+          summary: "SLO-A critical burn: join failure rate > 2x threshold (1h)"
+          description: >
+            The join failure rate measured over the past 1 hour exceeds 2x the
+            SLO-A error budget rate (0.5%). Current value: {{ $value | humanizePercentage }}.
+            P1 response required. See docs/operations/alerts.md.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"
+
+      # Warning: 5x burn rate over 6 hours
+      # A 5x burn over 6h consumes ~25% of the 30-day budget in one window.
+      - alert: SloAJoinSuccessRateWarning
+        expr: |
+          (
+            sum(rate(kaiju_join_total{outcome="failure"}[6h]))
+            /
+            sum(rate(kaiju_join_total[6h]))
+          ) > (5 * 0.005)
+        for: 10m
+        labels:
+          severity: warning
+          slo: slo-a
+          team: kaiju-ops
+        annotations:
+          summary: "SLO-A warning burn: join failure rate > 5x threshold (6h)"
+          description: >
+            The join failure rate measured over the past 6 hours exceeds 5x the
+            SLO-A error budget rate (0.5%). Current value: {{ $value | humanizePercentage }}.
+            P2 response — investigate within 30 minutes. See docs/operations/alerts.md.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"
+
+      # -----------------------------------------------------------------------
+      # SLO-B: Join Latency p95
+      # Target: p95 <= 3000 ms over a 30-day rolling window
+      # Budget: 0.5% of hourly evaluation periods may fail (≈ 3.6 h per 30 d)
+      # -----------------------------------------------------------------------
+
+      # Critical: p95 > 6000 ms (2x target) sustained over 1 hour
+      - alert: SloBJoinLatencyP95Critical
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(kaiju_join_latency_ms_bucket[1h])) by (le)
+          ) > 6000
+        for: 5m
+        labels:
+          severity: critical
+          slo: slo-b
+          team: kaiju-ops
+        annotations:
+          summary: "SLO-B critical: join latency p95 > 6000 ms (1h)"
+          description: >
+            The 1-hour p95 join latency is {{ $value | humanizeDuration }} which
+            exceeds 6000 ms (2x the SLO-B target of 3000 ms).
+            P1 response required. Check game loop metrics and MatchRoom state.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"
+
+      # Warning: p95 > 3000 ms (at target boundary) sustained over 6 hours
+      - alert: SloBJoinLatencyP95Warning
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(kaiju_join_latency_ms_bucket[6h])) by (le)
+          ) > 3000
+        for: 10m
+        labels:
+          severity: warning
+          slo: slo-b
+          team: kaiju-ops
+        annotations:
+          summary: "SLO-B warning: join latency p95 > 3000 ms (6h)"
+          description: >
+            The 6-hour p95 join latency is {{ $value | humanizeDuration }} which
+            exceeds the SLO-B target of 3000 ms. P2 response — review
+            kaiju_join_latency_ms histogram and server load.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"

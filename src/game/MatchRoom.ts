@@ -28,6 +28,14 @@ import {
 import { executeTick, validateTickTiming } from "./GameLoop";
 import { selectCityBase } from "./lastStandCities";
 import { v4 as uuid } from "uuid";
+import { performance } from "node:perf_hooks";
+import { config } from "../ops/config";
+import { isDraining } from "../ops/runtime-state";
+import { logger } from "../ops/logger";
+import { incCounter, setGauge } from "../ops/metrics";
+import { startSpan } from "../ops/tracing";
+
+let activeRoomCount = 0;
 
 const COMMANDER_ASSET_STARTING_COUNTS: Record<string, number> = {
   "Scramble Jets": 5,
@@ -130,7 +138,9 @@ export class MatchRoom extends Room<MatchSchema> {
   }
 
   onCreate(options: Record<string, unknown>) {
-    console.log("MatchRoom created");
+    activeRoomCount++;
+    setGauge("kaiju_active_rooms", activeRoomCount);
+    logger.info("room.created", { roomId: this.roomId });
 
     // Initialize schema
     this.state = new MatchSchema();
@@ -176,7 +186,9 @@ export class MatchRoom extends Room<MatchSchema> {
 
     // Set room options
     this.maxClients = 1 + MatchRoom.MAX_KAIJU_SLOTS; // 1 commander + up to 4 kaiju
-    this.autoDispose = true;
+    // Keep the room alive across intentional client handoff/reconnect during active matches.
+    // We dispose explicitly when the room is truly idle.
+    this.autoDispose = false;
 
     // Set up message handlers
     this.onMessage("*", (client: Client, messageType: string | number, message: unknown) => {
@@ -195,7 +207,16 @@ export class MatchRoom extends Room<MatchSchema> {
   }
 
   onJoin(client: Client, options?: Record<string, unknown>) {
-    console.log(`Client ${client.sessionId} joined`);
+    const joinSpan = startSpan("room.join");
+
+    // Drain guard: reject new joins when draining; allow reconnects through.
+    if (isDraining() && typeof options?.reconnectToken !== "string") {
+      const drainClient = client as unknown as RejectionCapableClient;
+      if (typeof drainClient.leave === "function") {
+        drainClient.leave(1013, "Server draining, please reconnect to another instance");
+      }
+      return;
+    }
 
     const requestedRole =
       typeof options?.role === "string"
@@ -254,13 +275,23 @@ export class MatchRoom extends Room<MatchSchema> {
     this.refreshLobbyMetadata();
     this.reconcileLobbyPhase();
 
+    const role = session.role?.toLowerCase();
+    logger.info("client.join", { roomId: this.roomId, role });
+    if (role) {
+      incCounter("kaiju_join_total", { outcome: "success", role });
+    }
+    setGauge("kaiju_active_players", this.clients?.length ?? 0);
+    joinSpan.end();
+
     if (this.state.metadata.state === "WAITING") {
       this.broadcastMatchPhase("WAITING");
     }
   }
 
   onLeave(client: Client, code?: number) {
-    console.log(`Client ${client.sessionId} left`);
+    logger.info("client.leave", { roomId: this.roomId, code: code ?? 0 });
+    incCounter("kaiju_disconnect_total", { code: code === 1000 ? "graceful" : "abrupt" });
+    setGauge("kaiju_active_players", Math.max(0, (this.clients?.length ?? 1) - 1));
 
     const session = this.playerSessions.get(client.sessionId);
     if (!session) {
@@ -270,7 +301,8 @@ export class MatchRoom extends Room<MatchSchema> {
     if (session.role === "COMMANDER") {
       this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
       const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
-      if (disconnectedAbruptly) {
+      const shouldAttemptReconnect = disconnectedAbruptly || this.state.metadata.state === "ACTIVE";
+      if (shouldAttemptReconnect) {
         this.startCommanderReconnectWindow(session);
       } else {
         this.releaseCommanderClaim(session, false);
@@ -280,7 +312,7 @@ export class MatchRoom extends Room<MatchSchema> {
       if (leviathan) {
         const hasReconnectCredits = leviathan.credits > 0;
         const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
-        const canGraceReconnect = disconnectedAbruptly && hasReconnectCredits;
+        const canGraceReconnect = (disconnectedAbruptly || this.state.metadata.state === "ACTIVE") && hasReconnectCredits;
 
         if (canGraceReconnect) {
           this.startReconnectGraceWindow(leviathan, session);
@@ -294,11 +326,23 @@ export class MatchRoom extends Room<MatchSchema> {
     this.playerSessions.delete(client.sessionId);
     this.refreshLobbyMetadata();
     this.reconcileLobbyPhase();
+    this.disconnectIfIdle();
+  }
 
-    // If room is empty, it will auto-dispose
-    if (this.playerSessions.size === 0) {
-      this.disconnect();
+  private hasPendingReconnectWindows(): boolean {
+    return this.reconnectGraceWindows.size > 0 || Boolean(this.commanderReconnectWindow);
+  }
+
+  private disconnectIfIdle() {
+    if (this.playerSessions.size > 0) {
+      return;
     }
+
+    if (this.hasPendingReconnectWindows()) {
+      return;
+    }
+
+    this.disconnect();
   }
 
   private rejectJoin(client: Client, reason: string) {
@@ -361,6 +405,10 @@ export class MatchRoom extends Room<MatchSchema> {
 
         case "commander.dispatch":
           if (validateCommanderDispatch(message) && session.role === "COMMANDER") {
+            if (!config.FEATURE_DISPATCH_ENABLED) {
+              this.send(client, "commander.dispatch.result", { error: "dispatch temporarily disabled" });
+              break;
+            }
             this.handleCommanderDispatch(
               message.assetName,
               message.targetId
@@ -878,7 +926,12 @@ export class MatchRoom extends Room<MatchSchema> {
       this.reconnectGraceWindows.delete(leviathan.id);
     }
 
-    const reconnectToken = this.issueReconnectToken(leviathan.id);
+    // Reuse the token already held by the client (issued when the kaiju slot was claimed).
+    // Generating a new token here would make the grace window unreachable because the
+    // client navigates to /kaiju/index.html carrying the original token and has no way
+    // to receive the newly-issued one before the WebSocket closes.
+    const existingToken = this.reconnectTokenByLeviathanId.get(leviathan.id);
+    const reconnectToken = existingToken ?? this.issueReconnectToken(leviathan.id);
 
     console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
     this.emitSignal(
@@ -910,6 +963,7 @@ export class MatchRoom extends Room<MatchSchema> {
       }
 
       this.reconnectGraceWindows.delete(leviathan.id);
+      this.disconnectIfIdle();
     }, MatchRoom.RECONNECT_GRACE_MS);
 
     this.reconnectGraceWindows.set(leviathan.id, {
@@ -938,6 +992,7 @@ export class MatchRoom extends Room<MatchSchema> {
       this.state.metadata.state = "ENDED";
       this.state.metadata.outcome = "ABORTED";
       this.emitSignal("COMMANDER RECONNECT WINDOW EXPIRED - MATCH ABORTED", "critical", "SYSTEM");
+      this.disconnectIfIdle();
     }, MatchRoom.RECONNECT_GRACE_MS);
 
     this.commanderReconnectWindow = {
@@ -1097,7 +1152,7 @@ export class MatchRoom extends Room<MatchSchema> {
     this.broadcastCommanderStatus(this.state.metadata.startedAt);
 
     // Start game loop: 20 Hz (50ms per tick)
-    this.lastTickTime = Date.now();
+    this.lastTickTime = performance.now();
     this.tickIntervalId = setInterval(() => this.tick(), GAME_CONSTANTS.TICK_MS);
   }
 
@@ -1157,8 +1212,18 @@ export class MatchRoom extends Room<MatchSchema> {
 
   private tick() {
     const now = Date.now();
-    this.tickDeltaMs = now - this.lastTickTime;
-    this.lastTickTime = now;
+    const monotonicNow = performance.now();
+    this.tickDeltaMs = monotonicNow - this.lastTickTime;
+    this.lastTickTime = monotonicNow;
+
+    if (!Number.isFinite(this.tickDeltaMs) || this.tickDeltaMs < 0) {
+      this.tickDeltaMs = GAME_CONSTANTS.TICK_MS;
+    }
+
+    if (!config.FEATURE_TICK_BROADCAST_ENABLED) {
+      return;
+    }
+
     const signalCountBeforeTick = this.state.signalFeed.length;
 
     this.state.metadata.now = now;
@@ -1464,7 +1529,9 @@ export class MatchRoom extends Room<MatchSchema> {
   }
 
   onDispose() {
-    console.log("MatchRoom disposed");
+    activeRoomCount = Math.max(0, activeRoomCount - 1);
+    setGauge("kaiju_active_rooms", activeRoomCount);
+    logger.info("room.disposed", { roomId: this.roomId });
     if (this.tickIntervalId) {
       clearInterval(this.tickIntervalId);
     }

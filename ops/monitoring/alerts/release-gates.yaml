@@ -1,0 +1,61 @@
+# release-gates.yaml
+# Prometheus alerting rules for deployment-time gate conditions.
+# These alerts fire during staged rollouts and should trigger an automatic
+# or operator-initiated rollback when they persist.
+#
+# See docs/operations/release-policy.md (Rollback Triggers table) and
+# .github/workflows/deploy-production.yml (rollback job) for the full
+# response protocol.
+
+groups:
+  - name: kaiju_arcade_release_gates
+    rules:
+
+      # -----------------------------------------------------------------------
+      # Gate 1: Join failure rate spike
+      # Fires when the join failure rate exceeds 2% over a 3-minute window.
+      # This corresponds to the first row of the Rollback Triggers table:
+      #   "Join failure rate > 2% for 3+ minutes during any rollout stage"
+      # -----------------------------------------------------------------------
+      - alert: DeploymentJoinFailureRateHigh
+        expr: |
+          (
+            sum(rate(kaiju_join_total{outcome="failure"}[3m]))
+            /
+            sum(rate(kaiju_join_total[3m]))
+          ) > 0.02
+        for: 3m
+        labels:
+          severity: critical
+          gate: join-failure-rate
+          team: kaiju-ops
+        annotations:
+          summary: "Deployment gate: join failure rate > 2% for 3 minutes"
+          description: >
+            The join failure rate over the past 3 minutes is
+            {{ $value | humanizePercentage }}, exceeding the 2% rollback threshold.
+            Initiate rollback immediately via the deploy-production workflow
+            (release_stage=rollback) or the scripts/rollback-drill.sh script.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"
+
+      # -----------------------------------------------------------------------
+      # Gate 2: Disconnect spike
+      # Fires when disconnects exceed 50 per minute over a 2-minute window.
+      # This corresponds to the second row of the Rollback Triggers table:
+      #   "Disconnect spike > 50/min for 2+ minutes during any rollout stage"
+      # -----------------------------------------------------------------------
+      - alert: DeploymentDisconnectSpike
+        expr: |
+          sum(rate(kaiju_disconnect_total[2m])) * 60 > 50
+        for: 2m
+        labels:
+          severity: critical
+          gate: disconnect-spike
+          team: kaiju-ops
+        annotations:
+          summary: "Deployment gate: disconnect rate > 50/min for 2 minutes"
+          description: >
+            The disconnect rate over the past 2 minutes is
+            {{ $value | humanize }} disconnects/min, exceeding the 50/min
+            rollback threshold. Initiate rollback immediately.
+          runbook_url: "https://github.com/kaiju-arcade/kaiju-arcade/blob/main/docs/operations/runbooks/index.md"

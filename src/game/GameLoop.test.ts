@@ -53,6 +53,14 @@ describe("GameLoop determinism", () => {
     expect(validateTickTiming(80).isValid).toBe(false);
   });
 
+  it("flags negative deltas as invalid drift", () => {
+    const timing = validateTickTiming(-2480);
+
+    expect(timing.isValid).toBe(false);
+    expect(timing.drift).toBe(-2530);
+    expect(timing.driftPercent).toBe(-5060);
+  });
+
   it("limits heading turn rate to keep movement smooth", () => {
     const state = buildState();
     const leviathan = state.leviathans[0];
