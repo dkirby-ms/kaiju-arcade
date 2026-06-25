@@ -31,7 +31,7 @@ jobs:
       - name: Dependency audit
         run: npm audit --audit-level=high
       - name: Secret scan
-        uses: trufflesecurity/trufflehog@v3
+        uses: trufflesecurity/trufflehog@v3.95.6
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
