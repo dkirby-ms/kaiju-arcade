@@ -1,0 +1,268 @@
+# deploy-production.yml
+# GitHub Actions workflow for staged production deployments of kaiju-arcade.
+#
+# Deployment follows a three-stage progressive rollout:
+#   Stage 1 — Canary  (5% traffic)
+#   Stage 2 — Partial (25% traffic)
+#   Stage 3 — Stable  (100% traffic)
+#
+# Traffic splitting is platform-specific. Operators must configure the
+# routing rules (load balancer weights, ingress annotations, etc.) for their
+# target platform. Inline TODO comments mark the integration points.
+#
+# Prerequisites:
+#   - Secrets: DEPLOY_KEY (deployment credential for the target platform)
+#   - Variables: REGISTRY, IMAGE_NAME (container image coordinates)
+
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+      release_stage:
+        description: "Release stage to deploy"
+        required: true
+        default: "canary"
+        type: choice
+        options:
+          - canary
+          - partial
+          - stable
+          - rollback
+
+env:
+  NODE_VERSION: "24"
+  HEALTH_CHECK_URL: "https://${{ vars.DEPLOY_HOST }}/health/ready"
+  # Health-check gate: wait 5 minutes before polling readiness.
+  CANARY_SOAK_SECONDS: 300
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Build and test
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    if: github.event.inputs.release_stage != 'rollback'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test -- --runInBand
+
+      - name: Build
+        run: npm run build
+
+      # TODO: build and push container image to ${{ vars.REGISTRY }}/${{ vars.IMAGE_NAME }}
+      # Example (Docker):
+      #   - name: Build and push image
+      #     run: |
+      #       docker build -t ${{ vars.REGISTRY }}/${{ vars.IMAGE_NAME }}:${{ github.sha }} .
+      #       docker push ${{ vars.REGISTRY }}/${{ vars.IMAGE_NAME }}:${{ github.sha }}
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Deploy canary (5% traffic)
+  # ---------------------------------------------------------------------------
+  deploy-canary:
+    name: Deploy canary (5%)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: |
+      github.event.inputs.release_stage == 'canary' ||
+      github.event.inputs.release_stage == 'partial' ||
+      github.event.inputs.release_stage == 'stable'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # TODO: insert platform-specific canary deployment command here.
+      # The goal is to route 5% of new connections to the new build.
+      # Examples:
+      #   Kubernetes: update the canary Deployment replica count + set
+      #     a weighted ingress annotation (e.g., nginx.ingress.kubernetes.io/canary-weight: "5")
+      #   AWS ECS: update the blue/green traffic split via CodeDeploy
+      #   Render / Railway: duplicate service with RELEASE_STAGE=canary env var
+      - name: Deploy canary replica
+        run: |
+          echo "Deploying canary: image=${{ github.sha }} stage=canary traffic=5%"
+          # TODO: replace with platform deployment command
+          # e.g.: kubectl set image deployment/kaiju-canary app=$IMAGE:${{ github.sha }}
+
+      - name: Set RELEASE_STAGE=canary on new replica
+        run: |
+          echo "Setting RELEASE_STAGE=canary"
+          # TODO: set environment variable on the new replica via platform CLI
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Health-check gate
+  # Wait 5 minutes for soak, then verify /health/ready returns 200.
+  #
+  # ERROR BUDGET GATE NOTE:
+  # Before approving promotion to the next stage, an operator should also
+  # verify that the SLO error budget is not in a freeze state. This can be
+  # automated by querying the Prometheus alerting API:
+  #   GET /api/v1/alerts?filter={alertname=~"SloA.*Critical|SloB.*Critical"}
+  # If any critical burn-rate alert is firing, block the promotion and initiate
+  # rollback. Wire that check here as a pre-promotion gate.
+  # ---------------------------------------------------------------------------
+  health-check-gate:
+    name: Health-check gate (5 min soak)
+    runs-on: ubuntu-latest
+    needs: deploy-canary
+    if: |
+      github.event.inputs.release_stage == 'canary' ||
+      github.event.inputs.release_stage == 'partial' ||
+      github.event.inputs.release_stage == 'stable'
+    steps:
+      - name: Wait for canary soak period
+        run: |
+          echo "Soaking for ${{ env.CANARY_SOAK_SECONDS }} seconds..."
+          sleep ${{ env.CANARY_SOAK_SECONDS }}
+
+      - name: Poll /health/ready
+        run: |
+          echo "Checking ${{ env.HEALTH_CHECK_URL }}"
+          # Retry up to 5 times with 10-second back-off
+          for i in $(seq 1 5); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${{ env.HEALTH_CHECK_URL }}" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed after 5 attempts. Triggering rollback."
+          exit 1
+
+      # TODO: add error-budget gate check here (see comment above)
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Promote to stable (100% traffic)
+  # Only runs when release_stage == 'stable' and gate passed.
+  # For 25% partial stage, operators run this workflow again with
+  #   release_stage=partial to shift traffic to 25%, then re-run with stable.
+  #
+  # Staged traffic progression:
+  #   Run 1: release_stage=canary  → 5%  traffic to new build
+  #   Run 2: release_stage=partial → 25% traffic to new build
+  #   Run 3: release_stage=stable  → 100% traffic to new build
+  # ---------------------------------------------------------------------------
+  deploy-stable:
+    name: Promote to stable (100%)
+    runs-on: ubuntu-latest
+    needs: health-check-gate
+    if: github.event.inputs.release_stage == 'stable'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # TODO: shift 100% of traffic to the new build and remove canary replica.
+      # Example (Kubernetes):
+      #   kubectl set image deployment/kaiju-stable app=$IMAGE:${{ github.sha }}
+      #   kubectl delete deployment/kaiju-canary
+      #   kubectl annotate ingress kaiju nginx.ingress.kubernetes.io/canary-
+      - name: Promote new build to stable
+        run: |
+          echo "Promoting to stable: image=${{ github.sha }} stage=stable traffic=100%"
+          # TODO: replace with platform promotion command
+
+      - name: Set RELEASE_STAGE=stable
+        run: |
+          echo "Setting RELEASE_STAGE=stable"
+          # TODO: update environment variable on the stable deployment
+
+      - name: Mark release complete
+        run: |
+          echo "Release complete: ${{ github.sha }} promoted to stable in ${{ github.event.inputs.environment }}"
+
+  # ---------------------------------------------------------------------------
+  # Job 5: Rollback — redeploy the previous stable tag
+  #
+  # Triggered manually with release_stage=rollback.
+  # The operator must supply the previous stable tag via the PREVIOUS_TAG
+  # repository variable or by editing this job before dispatch.
+  #
+  # Rollback gate conditions that should trigger this job (can also be
+  # triggered automatically from alerting):
+  #   - Join failure rate > 2% for 3 minutes (SloAJoinSuccessRateCritical)
+  #   - Disconnect spike > 50/min for 2 minutes (DeploymentDisconnectSpike)
+  # See ops/monitoring/alerts/release-gates.yaml for the alert rules.
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: Rollback to previous stable tag
+    runs-on: ubuntu-latest
+    if: github.event.inputs.release_stage == 'rollback'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Identify previous stable tag
+        id: prev-tag
+        run: |
+          # Resolve the previous stable tag. Prefer the repository variable
+          # PREVIOUS_STABLE_TAG; fall back to the second-to-last semver tag.
+          PREV="${{ vars.PREVIOUS_STABLE_TAG }}"
+          if [[ -z "$PREV" ]]; then
+            PREV=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
+          fi
+          if [[ -z "$PREV" ]]; then
+            echo "ERROR: Cannot resolve previous stable tag. Set PREVIOUS_STABLE_TAG repository variable."
+            exit 1
+          fi
+          echo "Previous stable tag: $PREV"
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+
+      # TODO: replace with platform-specific rollback command.
+      # Example (Kubernetes):
+      #   kubectl set image deployment/kaiju-stable app=$IMAGE:${{ steps.prev-tag.outputs.tag }}
+      #   kubectl rollout status deployment/kaiju-stable
+      - name: Redeploy previous stable image
+        run: |
+          echo "Rolling back to: ${{ steps.prev-tag.outputs.tag }}"
+          # TODO: insert platform rollback command here
+
+      - name: Verify rollback health
+        run: |
+          sleep 30
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ env.HEALTH_CHECK_URL }}" || echo "000")
+          echo "Post-rollback health check: HTTP $STATUS"
+          if [[ "$STATUS" != "200" ]]; then
+            echo "WARNING: /health/ready returned $STATUS after rollback. Escalate immediately."
+            exit 1
+          fi
+          echo "Rollback health check passed."
+
+      - name: Notify team channel
+        run: |
+          echo "ROLLBACK COMPLETE: reverted to ${{ steps.prev-tag.outputs.tag }} in ${{ github.event.inputs.environment }}"
+          # TODO: post a message to your team's Slack/Teams channel here

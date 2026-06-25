@@ -14,6 +14,12 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./game/MatchRoom";
 import { getAvailableCities, normalizeRequestedCityName } from "./game/lastStandCities";
 import { getVersionInfo } from "./utils/version";
+import { config } from "./ops/config";
+import { isReady, isDraining, startDrain } from "./ops/runtime-state";
+import { logger, requestLogger } from "./ops/logger";
+import { incCounter, getMetricsText, observeHistogram } from "./ops/metrics";
+import { startSpan } from "./ops/tracing";
+import { joinRateLimiter, createMatchRateLimiter } from "./ops/rate-limit";
 
 const app = express();
 const httpServer = createServer(app);
@@ -23,12 +29,12 @@ const gameServer = new ColyseusServer({
   }),
 });
 
-const port = process.env.PORT || 3000;
-const hostname = process.env.HOST || "localhost";
-const portNum = typeof port === "string" ? parseInt(port, 10) : port;
+const portNum = config.PORT;
+const hostname = config.HOST;
 
 // Middleware
 app.use(express.json());
+app.use(requestLogger);
 app.use(
   "/commander",
   express.static(path.resolve(__dirname, "../public/commander"))
@@ -48,14 +54,38 @@ app.get("/lobby", (_req, res) => {
   res.sendFile(path.resolve(__dirname, "../public/lobby.html"));
 });
 
-// Health check endpoint
+// Health check endpoint (backwards-compatible)
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", version: getVersionInfo() });
+});
+
+// Liveness probe: always returns 200 if the process can serve requests
+app.get("/health/live", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+// Readiness probe: returns 503 while draining so load balancers stop routing here
+app.get("/health/ready", (_req, res) => {
+  if (isReady()) {
+    res.json({ status: "ok" });
+  } else {
+    res.status(503).json({ status: "draining" });
+  }
 });
 
 // Version endpoint
 app.get("/version", (_req, res) => {
   res.json(getVersionInfo());
+});
+
+// Prometheus metrics endpoint
+app.get("/metrics", (_req, res) => {
+  if (config.METRICS_ENABLED) {
+    res.setHeader("Content-Type", "text/plain; version=0.0.4");
+    res.send(getMetricsText());
+  } else {
+    res.status(404).json({ error: "Metrics not enabled" });
+  }
 });
 
 // REST API: Match creation options for clients (city dropdown data)
@@ -71,7 +101,13 @@ app.get("/api/matches/options", (_req, res) => {
 gameServer.define("match", MatchRoom).enableRealtimeListing();
 
 // REST API: Create new match
-app.post("/api/matches", async (req, res) => {
+app.post("/api/matches", createMatchRateLimiter, async (req, res) => {
+  if (isDraining()) {
+    res.status(503).json({ error: "Server draining, please reconnect to another instance" });
+    return;
+  }
+  const requestStart = Date.now();
+  const span = startSpan("api.match.create");
   try {
     const body = (req.body || {}) as Record<string, unknown>;
     const normalizedCityName = normalizeRequestedCityName(
@@ -87,6 +123,8 @@ app.post("/api/matches", async (req, res) => {
     }
 
     const reservation = await matchMaker.create("match", options as Record<string, unknown>);
+    incCounter("kaiju_join_total", { outcome: "success", role: "commander" });
+    observeHistogram("kaiju_join_latency_ms", Date.now() - requestStart, { outcome: "success" });
 
     res.json({
       roomName: "match",
@@ -104,7 +142,10 @@ app.post("/api/matches", async (req, res) => {
       cityOptions: getAvailableCities(),
       message: "Match created with seat reservation. Join by roomId/sessionId via Colyseus client.",
     });
+    span.end();
   } catch (error) {
+    incCounter("kaiju_join_total", { outcome: "failure", role: "commander" });
+    span.end(error as Error);
     res.status(400).json({ error: (error as Error).message });
   }
 });
@@ -134,10 +175,16 @@ app.get("/api/matches", async (_req, res) => {
 });
 
 // REST API: Reserve Kaiju seat for a specific room (mobile-friendly join helper)
-app.post("/api/matches/:roomId/kaiju-join", async (req, res) => {
+app.post("/api/matches/:roomId/kaiju-join", joinRateLimiter, async (req, res) => {
+  if (isDraining()) {
+    res.status(503).json({ error: "Server draining, please reconnect to another instance" });
+    return;
+  }
+  const span = startSpan("api.match.kaiju-join", { roomId: req.params.roomId });
   try {
     const roomId = req.params.roomId;
     if (!roomId) {
+      span.end();
       res.status(400).json({ error: "roomId is required" });
       return;
     }
@@ -164,16 +211,24 @@ app.post("/api/matches/:roomId/kaiju-join", async (req, res) => {
       },
       message: "Kaiju seat reserved. Join with consumeSeatReservation.",
     });
+    span.end();
   } catch (error) {
+    span.end(error as Error);
     res.status(400).json({ error: (error as Error).message });
   }
 });
 
 // REST API: Reserve seat for a specific room without committing to a role.
-app.post("/api/matches/:roomId/join", async (req, res) => {
+app.post("/api/matches/:roomId/join", joinRateLimiter, async (req, res) => {
+  if (isDraining()) {
+    res.status(503).json({ error: "Server draining, please reconnect to another instance" });
+    return;
+  }
+  const span = startSpan("api.match.join", { roomId: req.params.roomId });
   try {
     const roomId = req.params.roomId;
     if (!roomId) {
+      span.end();
       res.status(400).json({ error: "roomId is required" });
       return;
     }
@@ -201,7 +256,9 @@ app.post("/api/matches/:roomId/join", async (req, res) => {
       },
       message: "Seat reserved. Join with consumeSeatReservation.",
     });
+    span.end();
   } catch (error) {
+    span.end(error as Error);
     res.status(400).json({ error: (error as Error).message });
   }
 });
@@ -209,19 +266,7 @@ app.post("/api/matches/:roomId/join", async (req, res) => {
 export function startServer() {
   return httpServer.listen(portNum, hostname as string, () => {
     const version = getVersionInfo();
-    console.log(`
-╔════════════════════════════════════════════════════════════╗
-║           🦑 KAIJU ARCADE SERVER STARTED 🦑               ║
-╠════════════════════════════════════════════════════════════╣
-║ Version: ${version.version.padEnd(49)} ║
-║ Host:    ${(`http://${hostname}:${portNum}`).padEnd(49)} ║
-║ WS URL:  ${"ws://".concat(hostname, ":", portNum.toString()).padEnd(49)} ║
-╠════════════════════════════════════════════════════════════╣
-║ Health:  http://${hostname}:${portNum}/health              ║
-║ API:     http://${hostname}:${portNum}/api/matches         ║
-╚════════════════════════════════════════════════════════════╝
-    `.trim());
-    console.log("Ready for players to join!");
+    logger.info("server started", { host: hostname, port: portNum, version: version.version });
   });
 }
 
@@ -229,11 +274,23 @@ if (require.main === module) {
   startServer();
 }
 
-// Graceful shutdown
+// Graceful drain on SIGTERM (container shutdown, rolling deploys)
+process.on("SIGTERM", () => {
+  logger.info("sigterm received", { drainTimeoutMs: config.DRAIN_TIMEOUT_MS });
+  startDrain(config.DRAIN_TIMEOUT_MS);
+  setTimeout(() => {
+    httpServer.close(() => {
+      logger.info("server closed");
+      process.exit(0);
+    });
+  }, config.DRAIN_TIMEOUT_MS);
+});
+
+// Graceful shutdown on SIGINT (local dev / ctrl-C)
 process.on("SIGINT", () => {
-  console.log("\nShutting down gracefully...");
+  logger.info("sigint received, shutting down gracefully");
   httpServer.close(() => {
-    console.log("Server closed");
+    logger.info("server closed");
     process.exit(0);
   });
 });

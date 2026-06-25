@@ -1202,11 +1202,13 @@
       return;
     }
 
+    if (!window.KaijuColyseusClient) {
+      throw new Error("KaijuColyseusClient helper is not loaded.");
+    }
+
     updateConnectionState("CONNECTING", "alert");
 
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const endpoint = `${wsProtocol}//${window.location.host}`;
-    const client = new window.Colyseus.Client(endpoint);
+    const client = window.KaijuColyseusClient.createClient();
 
     const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
     const reconnectToken =
@@ -1217,7 +1219,7 @@
       return;
     }
 
-    const room = await client.join("match", selectedRoomId, {
+    const room = await window.KaijuColyseusClient.joinMatchById(client, selectedRoomId, {
       playerName: playerName,
       playerRole: "kaiju",
       reconnectToken,
