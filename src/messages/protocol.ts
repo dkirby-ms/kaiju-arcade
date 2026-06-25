@@ -58,6 +58,9 @@ export interface KaijuContainedSignal {
   type: "kaiju.contained";
   leviathanId: string;
   leviathanName: string;
+  creditsRemaining: number;
+  containedAt: number;
+  timestamp: number;
 }
 
 export interface SignalFeedEvent {
@@ -88,6 +91,24 @@ export interface CommanderDispatchResultEvent {
   targetId: string;
   outcome: "SUCCESS" | "PARTIAL" | "FAILED" | "UNVERIFIED";
   resolvedAt: number;
+}
+
+export interface KaijuAbilityResultEvent {
+  type: "kaiju.ability.result";
+  resultId: string;
+  leviathanId: string;
+  abilityId: string;
+  outcome: "APPLIED" | "REJECTED" | "UNVERIFIED";
+  message: string;
+  resolvedAt: number;
+}
+
+export interface KaijuSpectatorEvent {
+  type: "kaiju.spectator";
+  leviathanId: string;
+  leviathanName: string;
+  reason: "continue-window-expired";
+  timestamp: number;
 }
 
 export interface MatchResultEvent {
@@ -131,6 +152,8 @@ export type ServerEvent =
   | SignalFeedEvent
   | CommanderStatusEvent
   | CommanderDispatchResultEvent
+  | KaijuAbilityResultEvent
+  | KaijuSpectatorEvent
   | MatchResultEvent
   | MatchStartEvent
   | KaijuReconnectTokenEvent

@@ -1,0 +1,82 @@
+## NAME-STATUS
+A	public/commander/app.js
+A	public/commander/index.html
+A	public/commander/styles.css
+M	src/game/GameLoop.test.ts
+M	src/game/GameLoop.ts
+M	src/game/MatchRoom.test.ts
+M	src/game/MatchRoom.ts
+M	src/index.test.ts
+M	src/index.ts
+M	src/messages/protocol.ts
+M	src/schema/MatchSchema.test.ts
+M	src/schema/MatchSchema.ts
+A	src/utils/types.test.ts
+M	src/utils/types.ts
+
+## HUNKS
+FILE public/commander/app.js
+@@ -0,0 +1,189 @@
+FILE public/commander/index.html
+@@ -0,0 +1,81 @@
+FILE public/commander/styles.css
+@@ -0,0 +1,166 @@
+FILE src/game/GameLoop.test.ts
+@@ -52,0 +53,29 @@ describe("GameLoop determinism", () => {
+FILE src/game/GameLoop.ts
+@@ -32,0 +33 @@ export function executeTick(context: GameLoopContext): void {
+@@ -118,2 +119,92 @@ function processAttacks(context: GameLoopContext): void {
+@@ -149,0 +241,34 @@ function updateStatusEffects(context: GameLoopContext): void {
+FILE src/game/MatchRoom.test.ts
+@@ -227,0 +228,176 @@ describe("MatchRoom role assignment", () => {
+FILE src/game/MatchRoom.ts
+@@ -37,0 +38,9 @@ const COMMANDER_ASSET_STARTING_COUNTS: Record<string, number> = {
+@@ -120,0 +130 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -160 +170 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -179 +189 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -214 +224 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -228 +238 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -320,0 +331 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -327,0 +339,21 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -330 +362 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -334,0 +367,6 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -337 +375,2 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -370 +409 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -459 +498 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -478 +517 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -499 +538 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -551 +590 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -552,0 +592 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -581,0 +622 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -601,0 +643,6 @@ export class MatchRoom extends Room<MatchSchema> {
+@@ -610,0 +658,111 @@ export class MatchRoom extends Room<MatchSchema> {
+FILE src/index.test.ts
+@@ -128,0 +129,9 @@ describe("API /api/matches", () => {
+FILE src/index.ts
+@@ -9,0 +10 @@ import { createServer } from "http";
+@@ -30,0 +32,4 @@ app.use(express.json());
+FILE src/messages/protocol.ts
+@@ -67,0 +68,23 @@ export interface SignalFeedEvent {
+@@ -108,0 +132,2 @@ export type ServerEvent =
+FILE src/schema/MatchSchema.test.ts
+@@ -16,0 +17,5 @@ describe("CommanderStateSchema", () => {
+@@ -35,0 +41 @@ describe("CommanderStateSchema", () => {
+@@ -59 +65 @@ describe("CommanderStateSchema", () => {
+@@ -68,0 +75 @@ describe("CommanderStateSchema", () => {
+@@ -75,0 +83 @@ describe("CommanderStateSchema", () => {
+FILE src/schema/MatchSchema.ts
+@@ -163,0 +164,3 @@ export class SignalFeedEntrySchema extends Schema {
+@@ -219,0 +223,8 @@ export class CommanderStateSchema extends Schema {
+@@ -272 +283,6 @@ export class MatchSchema extends Schema {
+@@ -277,0 +294 @@ export class MatchSchema extends Schema {
+@@ -285,0 +303,33 @@ export class MatchSchema extends Schema {
+@@ -316,0 +367 @@ export class MatchSchema extends Schema {
+@@ -352,0 +404 @@ export class MatchSchema extends Schema {
+@@ -401,0 +454,4 @@ export class MatchSchema extends Schema {
+@@ -447,0 +504 @@ export class MatchSchema extends Schema {
+@@ -510,0 +568 @@ export interface CommanderSnapshot {
+@@ -549,0 +608 @@ export interface SignalFeedEntrySnapshot {
+FILE src/utils/types.test.ts
+@@ -0,0 +1,63 @@
+FILE src/utils/types.ts
+@@ -61,0 +62,90 @@ export interface ServerEventPayload {

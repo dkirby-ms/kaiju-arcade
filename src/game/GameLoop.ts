@@ -31,6 +31,7 @@ export function executeTick(context: GameLoopContext): void {
   updateLeviathanPositions(context);
   processAttacks(context);
   resolveCommanderDispatches(context);
+  processKaijuAbilities(context);
   updateStatusEffects(context);
   checkWinConditions(context);
 }
@@ -210,6 +211,123 @@ function resolveCommanderDispatches(context: GameLoopContext): void {
   }
 }
 
+function processKaijuAbilities(context: GameLoopContext): void {
+  const { state, now } = context;
+
+  for (const leviathan of state.leviathans) {
+    if (!leviathan.pendingAbilityId) {
+      continue;
+    }
+
+    const abilityId = leviathan.pendingAbilityId;
+    leviathan.pendingAbilityId = "";
+    leviathan.pendingAbilityRequestedAt = 0;
+
+    if (leviathan.status === "CONTAINED") {
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "REJECTED",
+        `ABILITY REJECTED - ${leviathan.name} CONTAINED`,
+        now
+      );
+      continue;
+    }
+
+    if (now < leviathan.abilityCooldownEndsAt) {
+      const cooldownMs = Math.max(0, leviathan.abilityCooldownEndsAt - now);
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "REJECTED",
+        `ABILITY REJECTED - ${Math.ceil(cooldownMs / 1000)}s COOLDOWN`,
+        now
+      );
+      continue;
+    }
+
+    if (leviathan.archetype === "Sniper" && abilityId === "submerge") {
+      leviathan.status = "SUBMERGED";
+      leviathan.statusEndTime = now + GAME_CONSTANTS.SUBMERGED_DURATION_MS;
+      leviathan.abilityCooldownEndsAt = now + GAME_CONSTANTS.ABILITY_COOLDOWNS_MS.submerge;
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "APPLIED",
+        `ABILITY APPLIED - ${leviathan.name} SUBMERGED`,
+        now
+      );
+      continue;
+    }
+
+    if (leviathan.archetype === "Dozer" && abilityId === "roar") {
+      for (const target of state.leviathans) {
+        if (target.id === leviathan.id || target.status === "CONTAINED") {
+          continue;
+        }
+
+        const distance = calculateDistance(leviathan.x, leviathan.y, target.x, target.y);
+        if (distance <= 0 || distance > GAME_CONSTANTS.ROAR_RADIUS_UNITS) {
+          continue;
+        }
+
+        const dx = target.x - leviathan.x;
+        const dy = target.y - leviathan.y;
+        const inv = 1 / distance;
+        target.x = Math.max(0, Math.min(100, target.x + dx * inv * GAME_CONSTANTS.ROAR_PUSH_UNITS));
+        target.y = Math.max(0, Math.min(100, target.y + dy * inv * GAME_CONSTANTS.ROAR_PUSH_UNITS));
+      }
+
+      leviathan.abilityCooldownEndsAt = now + GAME_CONSTANTS.ABILITY_COOLDOWNS_MS.roar;
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "APPLIED",
+        `ABILITY APPLIED - ${leviathan.name} ROAR SHOCKWAVE`,
+        now
+      );
+      continue;
+    }
+
+    if (leviathan.archetype === "Berserker" && abilityId === "frenzy") {
+      leviathan.status = "FRENZIED";
+      leviathan.statusEndTime = now + GAME_CONSTANTS.FRENZY_DURATION_MS;
+      leviathan.speed = 1.6;
+      leviathan.abilityCooldownEndsAt = now + GAME_CONSTANTS.ABILITY_COOLDOWNS_MS.frenzy;
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "APPLIED",
+        `ABILITY APPLIED - ${leviathan.name} FRENZY ENGAGED`,
+        now
+      );
+      continue;
+    }
+
+    if (leviathan.archetype === "Tank" && abilityId === "fortress") {
+      leviathan.status = "FORTIFIED";
+      leviathan.statusEndTime = now + GAME_CONSTANTS.FORTRESS_DURATION_MS;
+      leviathan.abilityCooldownEndsAt = now + GAME_CONSTANTS.ABILITY_COOLDOWNS_MS.fortress;
+      state.addKaijuAbilityResult(
+        leviathan.id,
+        abilityId,
+        "APPLIED",
+        `ABILITY APPLIED - ${leviathan.name} FORTRESS PLATING`,
+        now
+      );
+      continue;
+    }
+
+    state.addKaijuAbilityResult(
+      leviathan.id,
+      abilityId,
+      "UNVERIFIED",
+      `ABILITY UNVERIFIED - ${leviathan.name} ${abilityId}`,
+      now
+    );
+  }
+}
+
 /**
  * Update and expire status effects
  */
@@ -224,6 +342,8 @@ function updateStatusEffects(context: GameLoopContext): void {
     ) {
       // Status effect expired
       leviathan.status = "ACTIVE";
+      leviathan.speed = 1;
+      leviathan.statusEndTime = 0;
     }
   }
 
@@ -246,7 +366,7 @@ function applyMitigationDamage(
   state: MatchSchema,
   targetId: string,
   damage: number,
-  now: number,
+  _now: number,
   dispatchId: string
 ): void {
   const target = state.getLeviathan(targetId);
@@ -254,12 +374,24 @@ function applyMitigationDamage(
     return;
   }
 
-  target.hp = Math.max(0, target.hp - damage);
-  target.damageReceived += damage;
+  const submergedAdjusted =
+    target.status === "SUBMERGED"
+      ? Math.max(0, Math.round(damage * GAME_CONSTANTS.SUBMERGED_DAMAGE_ADJUSTMENT))
+      : damage;
+  const effectiveDamage =
+    target.status === "FORTIFIED"
+      ? Math.max(0, Math.round(submergedAdjusted * 0.6))
+      : submergedAdjusted;
+
+  target.hp = Math.max(0, target.hp - effectiveDamage);
+  target.damageReceived += effectiveDamage;
 
   if (target.hp <= 0) {
     target.status = "CONTAINED";
-    target.statusEndTime = now;
+    target.containedAt = _now;
+    // CONTAINED is a permanent terminal state; use MAX_SAFE_INTEGER so
+    // statusEndTime never looks "expired" even if the guard is removed.
+    target.statusEndTime = Number.MAX_SAFE_INTEGER;
     state.addSignal(`KAIJU ${target.name} CONTAINED`, "nominal", "SYSTEM", dispatchId);
   }
 }

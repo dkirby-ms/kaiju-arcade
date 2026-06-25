@@ -343,6 +343,235 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
+  it("handles kaiju move and ability client messages", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju).toBeDefined();
+
+    (room as unknown as {
+      handleClientMessage: (
+        client: { sessionId: string },
+        message: { type: string; heading?: number; abilityId?: string }
+      ) => void;
+    }).handleClientMessage(
+      { sessionId: "session-2" },
+      { type: "kaiju.move", heading: 270 }
+    );
+
+    expect(kaiju?.heading).toBe(270);
+
+    kaiju!.archetype = "Sniper";
+    (room as unknown as {
+      handleClientMessage: (
+        client: { sessionId: string },
+        message: { type: string; heading?: number; abilityId?: string }
+      ) => void;
+    }).handleClientMessage(
+      { sessionId: "session-2" },
+      { type: "kaiju.ability", abilityId: "submerge" }
+    );
+
+    (room as unknown as { tick: () => void }).tick();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "kaiju.ability.result",
+      expect.objectContaining({
+        type: "kaiju.ability.result",
+        leviathanId: kaiju?.id,
+        abilityId: "submerge",
+      })
+    );
+
+    room.onDispose();
+  });
+
+  it("allows kaiju continue inside the continue window", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju).toBeDefined();
+
+    kaiju!.status = "CONTAINED";
+    kaiju!.containedAt = Date.now();
+    kaiju!.hp = 0;
+    const creditsBefore = kaiju!.credits;
+
+    (room as unknown as {
+      handleClientMessage: (
+        client: { sessionId: string },
+        message: { type: string }
+      ) => void;
+    }).handleClientMessage(
+      { sessionId: "session-2" },
+      { type: "kaiju.continue" }
+    );
+
+    expect(kaiju?.status).toBe("ACTIVE");
+    expect(kaiju?.hp).toBeGreaterThan(0);
+    expect(kaiju?.credits).toBe((creditsBefore ?? 0) - 1);
+
+    room.onDispose();
+  });
+
+  it("rejects kaiju continue after continue window expires", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju).toBeDefined();
+
+    kaiju!.status = "CONTAINED";
+    kaiju!.containedAt = Date.now() - 11_000;
+    kaiju!.hp = 0;
+    kaiju!.credits = 0;
+    const creditsBefore = kaiju!.credits;
+
+    (room as unknown as {
+      handleClientMessage: (
+        client: { sessionId: string },
+        message: { type: string }
+      ) => void;
+    }).handleClientMessage(
+      { sessionId: "session-2" },
+      { type: "kaiju.continue" }
+    );
+
+    expect(kaiju?.status).toBe("CONTAINED");
+    expect(kaiju?.credits).toBe(creditsBefore);
+
+    (room as unknown as { tick: () => void }).tick();
+
+    expect(kaiju?.isSpectator).toBe(true);
+
+    room.onDispose();
+  });
+
+  it("broadcasts kaiju.spectator exactly once when continue window expires", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju).toBeDefined();
+
+    kaiju!.status = "CONTAINED";
+    kaiju!.containedAt = Date.now() - 11_000;
+    kaiju!.credits = 0;
+
+    (room as unknown as { tick: () => void }).tick();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "kaiju.spectator",
+      expect.objectContaining({
+        type: "kaiju.spectator",
+        leviathanId: kaiju?.id,
+        reason: "continue-window-expired",
+      })
+    );
+
+    const firstSpectatorCalls = broadcast.mock.calls.filter((call: unknown[]) => call[0] === "kaiju.spectator").length;
+    (room as unknown as { tick: () => void }).tick();
+    const secondSpectatorCalls = broadcast.mock.calls.filter((call: unknown[]) => call[0] === "kaiju.spectator").length;
+    expect(secondSpectatorCalls).toBe(firstSpectatorCalls);
+
+    room.onDispose();
+  });
+
+  it("broadcasts kaiju.contained once per containment event", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju).toBeDefined();
+
+    kaiju!.status = "CONTAINED";
+    kaiju!.containedAt = Date.now() - 1_000;
+
+    (room as unknown as { tick: () => void }).tick();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "kaiju.contained",
+      expect.objectContaining({
+        type: "kaiju.contained",
+        leviathanId: kaiju?.id,
+        leviathanName: kaiju?.name,
+        creditsRemaining: kaiju?.credits,
+      })
+    );
+
+    const firstContainedCalls = broadcast.mock.calls.filter((call: unknown[]) => call[0] === "kaiju.contained").length;
+
+    (room as unknown as { tick: () => void }).tick();
+    const secondContainedCalls = broadcast.mock.calls.filter((call: unknown[]) => call[0] === "kaiju.contained").length;
+    expect(secondContainedCalls).toBe(firstContainedCalls);
+
+    kaiju!.status = "ACTIVE";
+    kaiju!.containedAt = 0;
+    (room as unknown as { tick: () => void }).tick();
+
+    kaiju!.status = "CONTAINED";
+    kaiju!.containedAt = Date.now();
+    (room as unknown as { tick: () => void }).tick();
+
+    const thirdContainedCalls = broadcast.mock.calls.filter((call: unknown[]) => call[0] === "kaiju.contained").length;
+    expect(thirdContainedCalls).toBe(firstContainedCalls + 1);
+
+    room.onDispose();
+  });
+
   it("broadcasts commander status payload with cooldown and score state", () => {
     const room = new MatchRoom();
     const broadcast = jest.fn();

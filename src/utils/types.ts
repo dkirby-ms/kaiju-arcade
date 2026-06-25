@@ -83,6 +83,16 @@ export interface CommanderStatusEventModel {
   cityBaseHp: number;
 }
 
+export interface KaijuAbilityResultEventModel {
+  type: "kaiju.ability.result";
+  resultId: string;
+  leviathanId: string;
+  abilityId: string;
+  outcome: "APPLIED" | "REJECTED" | "UNVERIFIED";
+  message: string;
+  resolvedAt: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -146,6 +156,31 @@ export function isSignalFeedEventModel(payload: unknown): payload is SignalFeedE
     typeof payload.message === "string" &&
     hasValidSeverity &&
     (payload.dispatchId === undefined || typeof payload.dispatchId === "string")
+  );
+}
+
+/**
+ * Runtime guard for kaiju ability result payloads.
+ */
+export function isKaijuAbilityResultEventModel(
+  payload: unknown
+): payload is KaijuAbilityResultEventModel {
+  if (!isRecord(payload) || payload.type !== "kaiju.ability.result") {
+    return false;
+  }
+
+  const validOutcome =
+    payload.outcome === "APPLIED" ||
+    payload.outcome === "REJECTED" ||
+    payload.outcome === "UNVERIFIED";
+
+  return (
+    typeof payload.resultId === "string" &&
+    typeof payload.leviathanId === "string" &&
+    typeof payload.abilityId === "string" &&
+    validOutcome &&
+    typeof payload.message === "string" &&
+    typeof payload.resolvedAt === "number"
   );
 }
 

@@ -110,6 +110,51 @@ button.primary {
   gap: 0.5rem;
 }
 
+.status-grid.compact {
+  margin-bottom: 0.5rem;
+}
+
+.status-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+#alertModeState {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+}
+
+body.alert-mode .console-header,
+body.alert-mode .panel {
+  border-color: #7d1f1f;
+  box-shadow: 0 0 14px rgba(255, 71, 71, 0.2);
+}
+
+body.alert-mode .console-header h1,
+body.alert-mode .panel h2,
+body.alert-mode #alertModeState {
+  color: var(--red);
+  text-shadow: 0 0 8px rgba(255, 71, 71, 0.45);
+}
+
+body.alert-mode #signalFeed li.alert,
+body.alert-mode #signalFeed li.critical {
+  animation: alertPulse 1.25s ease-in-out infinite;
+}
+
+@keyframes alertPulse {
+  0%,
+  100% {
+    opacity: 0.78;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .status-grid div {
   border: 1px solid #2a2210;
   padding: 0.5rem;
@@ -157,6 +202,73 @@ li.alert {
 
 li.critical {
   color: var(--red);
+}
+
+.map-panel {
+  grid-column: 1 / -1;
+  box-shadow:
+    0 0 18px rgba(255, 179, 0, 0.07),
+    inset 0 0 32px rgba(255, 179, 0, 0.04);
+}
+
+.feed-panel {
+  box-shadow:
+    0 0 12px rgba(255, 179, 0, 0.06),
+    inset 0 0 20px rgba(255, 179, 0, 0.03);
+}
+
+.feed-panel li {
+  text-shadow: 0 0 6px currentColor;
+}
+
+#commandMap {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  cursor: crosshair;
+}
+
+.map-canvas-wrapper {
+  position: relative;
+  width: 100%;
+  height: 420px;
+}
+
+#leafletMap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #070704;
+  z-index: 1;
+}
+
+/* Shift CartoDB Dark Matter tiles toward amber CRT palette */
+#leafletMap .leaflet-tile-pane {
+  filter: sepia(0.55) hue-rotate(12deg) saturate(0.75) brightness(0.88);
+}
+
+/* Style Leaflet attribution to match the terminal aesthetic */
+.leaflet-control-attribution {
+  background: rgba(7, 7, 4, 0.88) !important;
+  color: #5a4a1a !important;
+  font-size: 9px !important;
+  border-top: 1px solid #33280d !important;
+}
+
+.leaflet-control-attribution a {
+  color: #7a6a2a !important;
+}
+
+#radarOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: block;
+  z-index: 100;
 }
 
 @media (max-width: 880px) {

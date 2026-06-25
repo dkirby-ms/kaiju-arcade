@@ -1,0 +1,1623 @@
+<pr-reference>
+  <source-branch>fix/post-merge-city-options-telemetry</source-branch>
+  <base-branch>main</base-branch>
+  <commits>
+    <commit><sha>a2444e929db3e0c05b5be1691fabffe5196776fc</sha><author>dkirby-ms</author><date>2026-06-24T12:24:37-05:00</date><subject>feat(game): implement epic 3 commander dashboard event and status flow</subject></commit>
+  </commits>
+  <name-status>
+    <file>A	public/commander/app.js</file>
+    <file>A	public/commander/index.html</file>
+    <file>A	public/commander/styles.css</file>
+    <file>M	src/game/GameLoop.test.ts</file>
+    <file>M	src/game/GameLoop.ts</file>
+    <file>M	src/game/MatchRoom.test.ts</file>
+    <file>M	src/game/MatchRoom.ts</file>
+    <file>M	src/index.test.ts</file>
+    <file>M	src/index.ts</file>
+    <file>M	src/messages/protocol.ts</file>
+    <file>M	src/schema/MatchSchema.test.ts</file>
+    <file>M	src/schema/MatchSchema.ts</file>
+    <file>A	src/utils/types.test.ts</file>
+    <file>M	src/utils/types.ts</file>
+  </name-status>
+  <numstat>
+    <row>189	0	public/commander/app.js</row>
+    <row>81	0	public/commander/index.html</row>
+    <row>166	0	public/commander/styles.css</row>
+    <row>29	0	src/game/GameLoop.test.ts</row>
+    <row>127	2	src/game/GameLoop.ts</row>
+    <row>176	0	src/game/MatchRoom.test.ts</row>
+    <row>169	11	src/game/MatchRoom.ts</row>
+    <row>9	0	src/index.test.ts</row>
+    <row>5	0	src/index.ts</row>
+    <row>25	0	src/messages/protocol.ts</row>
+    <row>9	1	src/schema/MatchSchema.test.ts</row>
+    <row>60	1	src/schema/MatchSchema.ts</row>
+    <row>63	0	src/utils/types.test.ts</row>
+    <row>90	0	src/utils/types.ts</row>
+  </numstat>
+  <full-diff><![CDATA[
+diff --git a/public/commander/app.js b/public/commander/app.js
+new file mode 100644
+index 0000000..c66cc21
+--- /dev/null
++++ b/public/commander/app.js
+@@ -0,0 +1,189 @@
++(() => {
++  const state = {
++    room: null,
++    status: null,
++  };
++
++  const playerNameEl = document.getElementById("playerName");
++  const cityNameEl = document.getElementById("cityName");
++  const createJoinButtonEl = document.getElementById("createJoinButton");
++  const connectionStateEl = document.getElementById("connectionState");
++  const signalFeedEl = document.getElementById("signalFeed");
++  const dispatchResultsEl = document.getElementById("dispatchResults");
++  const assetStatusEl = document.getElementById("assetStatus");
++  const targetIdEl = document.getElementById("targetId");
++  const cityBaseHpEl = document.getElementById("cityBaseHp");
++  const commanderScoreEl = document.getElementById("commanderScore");
++  const activeBarriersEl = document.getElementById("activeBarriers");
++  const selectedTargetEl = document.getElementById("selectedTarget");
++
++  function updateConnectionState(text, className) {
++    connectionStateEl.textContent = text;
++    connectionStateEl.className = `status ${className || ""}`.trim();
++  }
++
++  function appendSignal(entry) {
++    const li = document.createElement("li");
++    li.className = entry.severity || "nominal";
++    const dispatchSuffix = entry.dispatchId ? ` [${entry.dispatchId}]` : "";
++    li.textContent = `${new Date(entry.timestamp).toLocaleTimeString()} :: ${entry.message}${dispatchSuffix}`;
++    signalFeedEl.prepend(li);
++    if (signalFeedEl.children.length > 40) {
++      signalFeedEl.removeChild(signalFeedEl.lastChild);
++    }
++  }
++
++  function appendDispatchResult(entry) {
++    const li = document.createElement("li");
++    li.className = entry.outcome === "FAILED" ? "critical" : entry.outcome === "PARTIAL" ? "alert" : "nominal";
++    li.textContent = `${entry.assetName} -> ${entry.targetId} :: ${entry.outcome}`;
++    dispatchResultsEl.prepend(li);
++    if (dispatchResultsEl.children.length > 30) {
++      dispatchResultsEl.removeChild(dispatchResultsEl.lastChild);
++    }
++  }
++
++  function renderCommanderStatus(payload) {
++    state.status = payload;
++    cityBaseHpEl.textContent = String(payload.cityBaseHp);
++    commanderScoreEl.textContent = String(payload.commanderScore);
++    activeBarriersEl.textContent = String(payload.activeBarriers);
++    selectedTargetEl.textContent = payload.selectedLeviathanId || "NONE";
++
++    assetStatusEl.innerHTML = "";
++    Object.keys(payload.assetsRemaining).forEach((assetName) => {
++      const li = document.createElement("li");
++      const remaining = payload.assetsRemaining[assetName];
++      const cooldownMs = payload.assetCooldownsMsRemaining[assetName] || 0;
++      const isReady = payload.assetCooldownsReady ? payload.assetCooldownsReady[assetName] : cooldownMs <= 0;
++      const progress = payload.assetCooldownsProgress ? payload.assetCooldownsProgress[assetName] : isReady ? 1 : 0;
++      const progressPct = Math.round((progress || 0) * 100);
++      li.textContent = `${assetName} :: ${remaining} REMAINING :: CD ${Math.ceil(cooldownMs / 1000)}s :: ${progressPct}% :: ${isReady ? "READY" : "CHARGING"}`;
++      li.className = isReady ? "nominal" : "alert";
++      assetStatusEl.appendChild(li);
++    });
++  }
++
++  function refreshTargets() {
++    if (!state.room || !state.room.state || !state.room.state.leviathans) {
++      return;
++    }
++
++    const current = targetIdEl.value;
++    targetIdEl.innerHTML = "";
++
++    state.room.state.leviathans.forEach((leviathan) => {
++      const option = document.createElement("option");
++      option.value = leviathan.id;
++      option.textContent = `${leviathan.name} (${leviathan.status})`;
++      targetIdEl.appendChild(option);
++    });
++
++    if (current) {
++      targetIdEl.value = current;
++    }
++  }
++
++  async function loadCities() {
++    const response = await fetch("/api/matches/options");
++    const payload = await response.json();
++    cityNameEl.innerHTML = "";
++    payload.cityOptions.forEach((city) => {
++      const option = document.createElement("option");
++      option.value = city;
++      option.textContent = city;
++      cityNameEl.appendChild(option);
++    });
++    cityNameEl.value = payload.defaultCity;
++  }
++
++  async function createAndJoinAsCommander() {
++    updateConnectionState("CONNECTING", "alert");
++
++    const createResponse = await fetch("/api/matches", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ cityName: cityNameEl.value }),
++    });
++
++    if (!createResponse.ok) {
++      throw new Error("Failed to create match");
++    }
++
++    const reservation = await createResponse.json();
++    const endpoint = reservation.wsEndpoint.replace(/^ws:/, window.location.protocol === "https:" ? "wss:" : "ws:");
++
++    const client = new window.Colyseus.Client(endpoint);
++    const room = await client.joinById(reservation.roomId, {
++      playerName: (playerNameEl.value || "Commander").trim(),
++    });
++
++    state.room = room;
++    refreshTargets();
++
++    room.onStateChange(() => {
++      refreshTargets();
++    });
++
++    room.onMessage("signal.feed", (payload) => {
++      appendSignal(payload);
++    });
++
++    room.onMessage("commander.status", (payload) => {
++      renderCommanderStatus(payload);
++    });
++
++    room.onMessage("commander.dispatch.result", (payload) => {
++      appendDispatchResult(payload);
++    });
++
++    updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
++  }
++
++  function sendDispatch(assetName) {
++    if (!state.room) {
++      appendSignal({
++        timestamp: Date.now(),
++        message: "NO ACTIVE ROOM. CREATE MATCH FIRST.",
++        severity: "critical",
++      });
++      return;
++    }
++
++    const targetId = targetIdEl.value || "city-base";
++    if (targetId !== "city-base") {
++      state.room.send("commander.select", { leviathanId: targetId });
++    }
++
++    state.room.send("commander.dispatch", {
++      assetName,
++      targetId,
++    });
++  }
++
++  createJoinButtonEl.addEventListener("click", async () => {
++    createJoinButtonEl.disabled = true;
++    try {
++      await createAndJoinAsCommander();
++    } catch (error) {
++      updateConnectionState("OFFLINE", "critical");
++      appendSignal({
++        timestamp: Date.now(),
++        message: `CONNECT ERROR: ${error.message}`,
++        severity: "critical",
++      });
++    } finally {
++      createJoinButtonEl.disabled = false;
++    }
++  });
++
++  document.querySelectorAll("[data-asset]").forEach((button) => {
++    button.addEventListener("click", () => {
++      sendDispatch(button.dataset.asset);
++    });
++  });
++
++  loadCities().catch(() => {
++    updateConnectionState("OFFLINE", "critical");
++  });
++})();
+diff --git a/public/commander/index.html b/public/commander/index.html
+new file mode 100644
+index 0000000..c3b7e1f
+--- /dev/null
++++ b/public/commander/index.html
+@@ -0,0 +1,81 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <title>Kaiju Arcade Commander Console</title>
++    <link rel="stylesheet" href="/commander/styles.css" />
++    <script src="https://unpkg.com/colyseus.js@0.15.14/dist/colyseus.js"></script>
++  </head>
++  <body>
++    <main class="console-shell">
++      <header class="console-header">
++        <h1>COMMANDER CONSOLE</h1>
++        <p class="subline">LIVE MITIGATION CONTROL SURFACE</p>
++      </header>
++
++      <section class="panel controls-panel">
++        <h2>SESSION</h2>
++        <div class="field-row">
++          <label for="playerName">Operator</label>
++          <input id="playerName" type="text" value="Commander" maxlength="24" />
++        </div>
++        <div class="field-row">
++          <label for="cityName">City</label>
++          <select id="cityName"></select>
++        </div>
++        <button id="createJoinButton" class="primary">Create Match + Join</button>
++        <p id="connectionState" class="status">OFFLINE</p>
++      </section>
++
++      <section class="panel status-panel">
++        <h2>COMMAND STATUS</h2>
++        <div class="status-grid">
++          <div>
++            <span>BASE HP</span>
++            <strong id="cityBaseHp">-</strong>
++          </div>
++          <div>
++            <span>SCORE</span>
++            <strong id="commanderScore">-</strong>
++          </div>
++          <div>
++            <span>BARRIERS</span>
++            <strong id="activeBarriers">-</strong>
++          </div>
++          <div>
++            <span>SELECTED TARGET</span>
++            <strong id="selectedTarget">-</strong>
++          </div>
++        </div>
++      </section>
++
++      <section class="panel dispatch-panel">
++        <h2>DISPATCH</h2>
++        <div class="field-row">
++          <label for="targetId">Target</label>
++          <select id="targetId"></select>
++        </div>
++        <div class="dispatch-buttons">
++          <button data-asset="Scramble Jets">Scramble Jets</button>
++          <button data-asset="Deploy Mechs">Deploy Mechs</button>
++          <button data-asset="Raise Barrier">Raise Barrier</button>
++          <button data-asset="Evac Sector">Evac Sector</button>
++        </div>
++        <ul id="assetStatus"></ul>
++      </section>
++
++      <section class="panel feed-panel">
++        <h2>SIGNAL FEED</h2>
++        <ul id="signalFeed"></ul>
++      </section>
++
++      <section class="panel feed-panel">
++        <h2>DISPATCH RESULTS</h2>
++        <ul id="dispatchResults"></ul>
++      </section>
++    </main>
++
++    <script src="/commander/app.js"></script>
++  </body>
++</html>
+diff --git a/public/commander/styles.css b/public/commander/styles.css
+new file mode 100644
+index 0000000..e28768c
+--- /dev/null
++++ b/public/commander/styles.css
+@@ -0,0 +1,166 @@
++:root {
++  --bg: #070704;
++  --panel: #111108;
++  --line: #33280d;
++  --amber: #ffb300;
++  --green: #00d86f;
++  --red: #ff4747;
++  --text: #ffd76d;
++}
++
++* {
++  box-sizing: border-box;
++}
++
++body {
++  margin: 0;
++  min-height: 100vh;
++  font-family: "Arial Narrow", "Franklin Gothic Medium", sans-serif;
++  background:
++    repeating-linear-gradient(
++      180deg,
++      rgba(255, 179, 0, 0.05) 0,
++      rgba(255, 179, 0, 0.05) 1px,
++      transparent 2px,
++      transparent 4px
++    ),
++    radial-gradient(circle at 20% 10%, #1f1a09, var(--bg));
++  color: var(--text);
++}
++
++.console-shell {
++  width: min(1200px, 96vw);
++  margin: 1rem auto;
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 0.75rem;
++}
++
++.console-header {
++  grid-column: 1 / -1;
++  border: 1px solid var(--line);
++  background: rgba(17, 17, 8, 0.92);
++  padding: 0.75rem 1rem;
++  text-transform: uppercase;
++  letter-spacing: 0.1em;
++}
++
++.console-header h1 {
++  margin: 0;
++  font-size: 1.2rem;
++  color: var(--amber);
++  text-shadow: 0 0 8px rgba(255, 179, 0, 0.5);
++}
++
++.console-header .subline {
++  margin: 0.25rem 0 0;
++  color: #bca063;
++  font-size: 0.85rem;
++}
++
++.panel {
++  border: 1px solid var(--line);
++  background: rgba(17, 17, 8, 0.92);
++  padding: 0.75rem;
++}
++
++.panel h2 {
++  margin: 0 0 0.65rem;
++  font-size: 0.85rem;
++  text-transform: uppercase;
++  color: var(--amber);
++}
++
++.field-row {
++  display: flex;
++  flex-direction: column;
++  gap: 0.25rem;
++  margin-bottom: 0.6rem;
++}
++
++input,
++select,
++button {
++  width: 100%;
++  border: 1px solid var(--line);
++  background: #0b0b05;
++  color: var(--text);
++  padding: 0.45rem 0.5rem;
++  font: inherit;
++  text-transform: uppercase;
++  letter-spacing: 0.05em;
++}
++
++button {
++  cursor: pointer;
++}
++
++button.primary {
++  border-color: var(--amber);
++}
++
++.status {
++  margin: 0.5rem 0 0;
++  font-size: 0.85rem;
++}
++
++.status-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 0.5rem;
++}
++
++.status-grid div {
++  border: 1px solid #2a2210;
++  padding: 0.5rem;
++}
++
++.status-grid span {
++  display: block;
++  font-size: 0.7rem;
++  color: #bca063;
++}
++
++.status-grid strong {
++  display: block;
++  margin-top: 0.3rem;
++  font-size: 1rem;
++}
++
++.dispatch-buttons {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 0.45rem;
++}
++
++ul {
++  margin: 0;
++  padding: 0;
++  list-style: none;
++  max-height: 220px;
++  overflow: auto;
++}
++
++li {
++  border-bottom: 1px solid #241d0e;
++  padding: 0.35rem 0;
++  font-size: 0.78rem;
++}
++
++li.nominal {
++  color: var(--amber);
++}
++
++li.alert {
++  color: var(--green);
++}
++
++li.critical {
++  color: var(--red);
++}
++
++@media (max-width: 880px) {
++  .console-shell {
++    grid-template-columns: 1fr;
++  }
++}
+diff --git a/src/game/GameLoop.test.ts b/src/game/GameLoop.test.ts
+index 9f65778..6fa94ea 100644
+--- a/src/game/GameLoop.test.ts
++++ b/src/game/GameLoop.test.ts
+@@ -50,4 +50,33 @@ describe("GameLoop determinism", () => {
+     expect(validateTickTiming(180).isValid).toBe(true);
+     expect(validateTickTiming(230).isValid).toBe(false);
+   });
++
++  it("resolves pending dispatches when delay elapses", () => {
++    const state = buildState();
++    const target = state.leviathans[0];
++    target.hp = 100;
++
++    const dispatch = state.createDispatchRecord("Deploy Mechs", target.id, 1_000);
++    dispatch.delayMs = 0;
++    state.dispatchHistory.push(dispatch);
++
++    executeTick({ state, deltaMs: 200, tickCount: 1, now: 1_200 });
++
++    expect(state.dispatchHistory[0].resolvedAt).toBe(1_200);
++    expect(["SUCCESS", "PARTIAL", "FAILED", "UNVERIFIED"]).toContain(state.dispatchHistory[0].outcome);
++    expect(state.signalFeed.length).toBeGreaterThan(0);
++  });
++
++  it("creates barrier when Raise Barrier dispatch resolves", () => {
++    const state = buildState();
++    const dispatch = state.createDispatchRecord("Raise Barrier", "city-base", 2_000);
++    dispatch.delayMs = 0;
++    state.dispatchHistory.push(dispatch);
++
++    executeTick({ state, deltaMs: 200, tickCount: 2, now: 2_200 });
++
++    expect(state.dispatchHistory[0].outcome).toBe("SUCCESS");
++    expect(state.activeBarriers.length).toBe(1);
++    expect(state.activeBarriers[0].expiresAt).toBe(10_200);
++  });
+ });
+diff --git a/src/game/GameLoop.ts b/src/game/GameLoop.ts
+index 2e2fe7b..4712e4e 100644
+--- a/src/game/GameLoop.ts
++++ b/src/game/GameLoop.ts
+@@ -30,6 +30,7 @@ export function executeTick(context: GameLoopContext): void {
+ 
+   updateLeviathanPositions(context);
+   processAttacks(context);
++  resolveCommanderDispatches(context);
+   updateStatusEffects(context);
+   checkWinConditions(context);
+ }
+@@ -115,8 +116,98 @@ function processAttacks(context: GameLoopContext): void {
+     }
+   }
+ 
+-  // Process Commander dispatch queue and mitigation
+-  // TODO: Implement asset dispatch resolution with delay
++}
++
++function resolveCommanderDispatches(context: GameLoopContext): void {
++  const { state, now } = context;
++
++  for (const dispatch of state.dispatchHistory) {
++    if (dispatch.resolvedAt > 0) {
++      continue;
++    }
++
++    const isReadyToResolve = now - dispatch.dispatchedAt >= dispatch.delayMs;
++    if (!isReadyToResolve) {
++      continue;
++    }
++
++    dispatch.resolvedAt = now;
++
++    switch (dispatch.assetName) {
++      case "Scramble Jets":
++      case "Deploy Mechs": {
++        const target = state.getLeviathan(dispatch.targetId);
++        if (!target || target.status === "CONTAINED") {
++          dispatch.outcome = "UNVERIFIED";
++          state.addSignal(
++            `MITIGATION UNVERIFIED - ${dispatch.assetName} TARGET LOST`,
++            "alert",
++            "SYSTEM",
++            dispatch.id
++          );
++          break;
++        }
++
++        const roll = deterministicRoll(dispatch.id, now);
++        const profile = dispatch.assetName === "Scramble Jets"
++          ? { success: 0.65, partial: 0.2, maxDamage: 40 }
++          : { success: 0.55, partial: 0.25, maxDamage: 30 };
++
++        if (roll <= profile.success) {
++          dispatch.outcome = "SUCCESS";
++          applyMitigationDamage(state, target.id, profile.maxDamage, now, dispatch.id);
++          state.metadata.commanderScore += 20;
++          state.addSignal(
++            `${dispatch.assetName.toUpperCase()} SUCCESS - ${target.name} CONTAINMENT HIT`,
++            "nominal",
++            "SYSTEM",
++            dispatch.id
++          );
++        } else if (roll <= profile.success + profile.partial) {
++          dispatch.outcome = "PARTIAL";
++          applyMitigationDamage(state, target.id, Math.round(profile.maxDamage * 0.5), now, dispatch.id);
++          state.metadata.commanderScore += 8;
++          state.addSignal(
++            `${dispatch.assetName.toUpperCase()} PARTIAL - ${target.name} REPULSED`,
++            "alert",
++            "SYSTEM",
++            dispatch.id
++          );
++        } else {
++          dispatch.outcome = "FAILED";
++          state.addSignal(
++            `${dispatch.assetName.toUpperCase()} FAILED - ${target.name} EVADED`,
++            "critical",
++            "SYSTEM",
++            dispatch.id
++          );
++        }
++
++        break;
++      }
++
++      case "Raise Barrier": {
++        const barrier = state.createBarrier(now, now + 8_000);
++        state.activeBarriers.push(barrier);
++        dispatch.outcome = "SUCCESS";
++        state.metadata.commanderScore += 5;
++        state.addSignal("RAISE BARRIER ONLINE - CITY BASE SHIELDED", "nominal", "SYSTEM", dispatch.id);
++        break;
++      }
++
++      case "Evac Sector": {
++        dispatch.outcome = "SUCCESS";
++        state.metadata.commanderScore += 12;
++        state.addSignal("EVAC SECTOR SUCCESS - CIVILIANS RELOCATED", "nominal", "SYSTEM", dispatch.id);
++        break;
++      }
++
++      default:
++        dispatch.outcome = "UNVERIFIED";
++        state.addSignal("MITIGATION UNVERIFIED - UNKNOWN ASSET", "alert", "SYSTEM", dispatch.id);
++        break;
++    }
++  }
+ }
+ 
+ /**
+@@ -147,6 +238,40 @@ function updateStatusEffects(context: GameLoopContext): void {
+   }
+ }
+ 
++function applyMitigationDamage(
++  state: MatchSchema,
++  targetId: string,
++  damage: number,
++  now: number,
++  dispatchId: string
++): void {
++  const target = state.getLeviathan(targetId);
++  if (!target || target.status === "CONTAINED") {
++    return;
++  }
++
++  target.hp = Math.max(0, target.hp - damage);
++  target.damageReceived += damage;
++
++  if (target.hp <= 0) {
++    target.status = "CONTAINED";
++    target.statusEndTime = now;
++    state.addSignal(`KAIJU ${target.name} CONTAINED`, "nominal", "SYSTEM", dispatchId);
++  }
++}
++
++function deterministicRoll(seed: string, now: number): number {
++  const input = `${seed}:${Math.floor(now / GAME_CONSTANTS.TICK_MS)}`;
++  let hash = 2166136261;
++
++  for (let i = 0; i < input.length; i++) {
++    hash ^= input.charCodeAt(i);
++    hash = Math.imul(hash, 16777619);
++  }
++
++  return ((hash >>> 0) % 1000) / 1000;
++}
++
+ /**
+  * Check for match win/loss conditions
+  */
+diff --git a/src/game/MatchRoom.test.ts b/src/game/MatchRoom.test.ts
+index 02f4188..dc3c4b0 100644
+--- a/src/game/MatchRoom.test.ts
++++ b/src/game/MatchRoom.test.ts
+@@ -225,6 +225,182 @@ describe("MatchRoom role assignment", () => {
+     room.onDispose();
+   });
+ 
++  it("broadcasts signal feed events for commander and kaiju joins", () => {
++    const room = new MatchRoom();
++    const broadcast = jest.fn();
++    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
++
++    room.onCreate({ cityName: "Neo Tokyo" });
++    room.onJoin(
++      { id: "client-1", sessionId: "session-1" } as unknown as never,
++      { playerName: "Commander One" }
++    );
++    room.onJoin(
++      { id: "client-2", sessionId: "session-2" } as unknown as never,
++      { playerName: "Kaiju One" }
++    );
++
++    expect(broadcast).toHaveBeenCalledWith(
++      "signal.feed",
++      expect.objectContaining({
++        type: "signal.feed",
++        message: "COMMANDER COMMANDER ONE ONLINE",
++        severity: "nominal",
++      })
++    );
++    expect(broadcast).toHaveBeenCalledWith(
++      "signal.feed",
++      expect.objectContaining({
++        type: "signal.feed",
++        message: expect.stringContaining("PILOT ENGAGED"),
++        severity: "nominal",
++      })
++    );
++
++    room.onDispose();
++  });
++
++  it("validates commander dispatch target and cooldown before consuming assets", () => {
++    const room = new MatchRoom();
++
++    room.onCreate({ cityName: "Neo Tokyo" });
++    room.onJoin(
++      { id: "client-1", sessionId: "session-1" } as unknown as never,
++      { playerName: "Commander One" }
++    );
++    room.onJoin(
++      { id: "client-2", sessionId: "session-2" } as unknown as never,
++      { playerName: "Kaiju One" }
++    );
++
++    const targetLeviathan = room.state.leviathans.find(
++      (leviathan: LeviathanSchema) => leviathan.playerId === "session-2"
++    );
++    expect(targetLeviathan).toBeDefined();
++
++    const initialJetCount = room.state.commander.assetsRemaining.get("Scramble Jets");
++
++    (room as unknown as {
++      handleCommanderDispatch: (assetName: string, targetId: string) => void;
++    }).handleCommanderDispatch("Scramble Jets", "missing-target");
++
++    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe(initialJetCount);
++    expect(
++      room.state.signalFeed.some(
++        (signal: { message: string }) => signal.message === "DISPATCH FAILED: Scramble Jets TARGET INVALID"
++      )
++    ).toBe(true);
++
++    (room as unknown as {
++      handleCommanderDispatch: (assetName: string, targetId: string) => void;
++    }).handleCommanderDispatch("Scramble Jets", targetLeviathan?.id ?? "");
++
++    expect(room.state.dispatchHistory.length).toBe(1);
++    expect(room.state.dispatchHistory[0].assetName).toBe("Scramble Jets");
++    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe((initialJetCount ?? 0) - 1);
++
++    (room as unknown as {
++      handleCommanderDispatch: (assetName: string, targetId: string) => void;
++    }).handleCommanderDispatch("Scramble Jets", targetLeviathan?.id ?? "");
++
++    expect(room.state.dispatchHistory.length).toBe(1);
++    expect(room.state.commander.assetsRemaining.get("Scramble Jets")).toBe((initialJetCount ?? 0) - 1);
++    expect(
++      room.state.signalFeed.some(
++        (signal: { message: string }) => signal.message.includes("DISPATCH FAILED: Scramble Jets COOLDOWN")
++      )
++    ).toBe(true);
++
++    room.onDispose();
++  });
++
++  it("broadcasts commander status payload with cooldown and score state", () => {
++    const room = new MatchRoom();
++    const broadcast = jest.fn();
++    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
++
++    room.onCreate({ cityName: "Neo Tokyo" });
++    room.onJoin(
++      { id: "client-1", sessionId: "session-1" } as unknown as never,
++      { playerName: "Commander One" }
++    );
++    room.onJoin(
++      { id: "client-2", sessionId: "session-2" } as unknown as never,
++      { playerName: "Kaiju One" }
++    );
++
++    expect(broadcast).toHaveBeenCalledWith(
++      "commander.status",
++      expect.objectContaining({
++        type: "commander.status",
++        selectedLeviathanId: "",
++        assetsRemaining: expect.objectContaining({ "Scramble Jets": 5 }),
++        assetCooldownsMsRemaining: expect.any(Object),
++        assetCooldownsReady: expect.any(Object),
++        assetCooldownsProgress: expect.any(Object),
++        commanderScore: 0,
++        cityBaseHp: expect.any(Number),
++      })
++    );
++
++    room.onDispose();
++  });
++
++  it("broadcasts commander dispatch results once and marks records applied", () => {
++    const room = new MatchRoom();
++    const broadcast = jest.fn();
++    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
++
++    room.onCreate({ cityName: "Neo Tokyo" });
++
++    const dispatch = room.state.createDispatchRecord("Deploy Mechs", "lev-1", Date.now());
++    dispatch.outcome = "SUCCESS";
++    dispatch.resolvedAt = Date.now();
++    dispatch.applied = false;
++    room.state.dispatchHistory.push(dispatch);
++
++    (room as unknown as { broadcastDispatchResults: () => void }).broadcastDispatchResults();
++
++    expect(broadcast).toHaveBeenCalledWith(
++      "commander.dispatch.result",
++      expect.objectContaining({
++        type: "commander.dispatch.result",
++        dispatchId: dispatch.id,
++        outcome: "SUCCESS",
++      })
++    );
++    expect(room.state.dispatchHistory[0].applied).toBe(true);
++
++    const callCountAfterFirstBroadcast = broadcast.mock.calls.length;
++    (room as unknown as { broadcastDispatchResults: () => void }).broadcastDispatchResults();
++    expect(broadcast.mock.calls.length).toBe(callCountAfterFirstBroadcast);
++
++    room.onDispose();
++  });
++
++  it("includes dispatchId in signal.feed payload when signal is dispatch-correlated", () => {
++    const room = new MatchRoom();
++    const broadcast = jest.fn();
++    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
++
++    room.onCreate({ cityName: "Neo Tokyo" });
++
++    (room as unknown as {
++      emitSignal: (message: string, severity: "nominal" | "alert" | "critical", source: string, dispatchId?: string) => void;
++    }).emitSignal("DISPATCH: TEST", "nominal", "COMMANDER", "dispatch-xyz");
++
++    expect(broadcast).toHaveBeenCalledWith(
++      "signal.feed",
++      expect.objectContaining({
++        type: "signal.feed",
++        message: "DISPATCH: TEST",
++        dispatchId: "dispatch-xyz",
++      })
++    );
++
++    room.onDispose();
++  });
++
+   it("broadcasts normalized result outcomes for all terminal paths", () => {
+     const scenarios = [
+       { rawOutcome: "KAIJU_VICTORY", expected: "kaiju-victory" },
+diff --git a/src/game/MatchRoom.ts b/src/game/MatchRoom.ts
+index e96e714..032ac26 100644
+--- a/src/game/MatchRoom.ts
++++ b/src/game/MatchRoom.ts
+@@ -35,6 +35,15 @@ const COMMANDER_ASSET_STARTING_COUNTS: Record<string, number> = {
+   "Evac Sector": 2,
+ };
+ 
++const COMMANDER_DISPATCH_COOLDOWN_MS: Record<string, number> = {
++  "Scramble Jets": 6_000,
++  "Deploy Mechs": 8_000,
++  "Raise Barrier": 12_000,
++  "Evac Sector": 10_000,
++};
++
++const COMMANDER_TARGETED_ASSETS = new Set<string>(["Scramble Jets", "Deploy Mechs"]);
++
+ interface PlayerSession {
+   clientId: string;
+   sessionId: string;
+@@ -118,6 +127,7 @@ export class MatchRoom extends Room<MatchSchema> {
+     // Initialize asset cooldowns
+     for (const [assetName, count] of Object.entries(COMMANDER_ASSET_STARTING_COUNTS)) {
+       this.state.commander.assetsRemaining.set(assetName, count);
++      this.state.commander.assetCooldowns.set(assetName, 0);
+     }
+ 
+     this.seedKaijuSlots();
+@@ -157,7 +167,7 @@ export class MatchRoom extends Room<MatchSchema> {
+       this.state.commander.playerName = playerName;
+       session.role = "COMMANDER";
+       console.log(`${playerName} assigned as COMMANDER`);
+-      this.state.addSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
++      this.emitSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
+     } else {
+       const reconnectToken =
+         typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
+@@ -176,7 +186,7 @@ export class MatchRoom extends Room<MatchSchema> {
+       session.leviathanId = leviathan.id;
+       this.sendReconnectToken(client, leviathan.id);
+       console.log(`${playerName} assigned as KAIJU ${leviathan.name}`);
+-      this.state.addSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
++      this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
+     }
+ 
+     this.playerSessions.set(client.sessionId, session);
+@@ -211,7 +221,7 @@ export class MatchRoom extends Room<MatchSchema> {
+       this.broadcast("match.join.rejected", telemetry);
+     }
+ 
+-    this.state.addSignal("JOIN REJECTED - MATCH AT CAPACITY", "alert", "SYSTEM");
++    this.emitSignal("JOIN REJECTED - MATCH AT CAPACITY", "alert", "SYSTEM");
+     console.warn(JSON.stringify(telemetry));
+   }
+ 
+@@ -225,7 +235,7 @@ export class MatchRoom extends Room<MatchSchema> {
+ 
+     if (session.role === "COMMANDER") {
+       // Commander disconnected - replace with AI or end match
+-      this.state.addSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
++      this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
+       // For now, just mark as disconnected; could implement AI takeover
+       if (this.state.metadata.state === "ACTIVE") {
+         this.state.metadata.state = "ENDED";
+@@ -318,6 +328,7 @@ export class MatchRoom extends Room<MatchSchema> {
+     if (leviathan) {
+       this.state.commander.selectedLeviathanId = leviathanId;
+       console.log(`Commander selected ${leviathan.name}`);
++      this.broadcastCommanderStatus(Date.now());
+     }
+   }
+ 
+@@ -325,16 +336,44 @@ export class MatchRoom extends Room<MatchSchema> {
+     assetName: string,
+     targetId: string
+   ) {
++    const now = Date.now();
++    const cooldownReadyAt = this.state.commander.assetCooldowns.get(assetName) ?? 0;
++    if (now < cooldownReadyAt) {
++      const secondsRemaining = Math.ceil((cooldownReadyAt - now) / 1000);
++      this.emitSignal(
++        `DISPATCH FAILED: ${assetName} COOLDOWN ${secondsRemaining}s`,
++        "alert",
++        "SYSTEM"
++      );
++      return;
++    }
++
++    if (COMMANDER_TARGETED_ASSETS.has(assetName) && !this.state.getLeviathan(targetId)) {
++      this.emitSignal(
++        `DISPATCH FAILED: ${assetName} TARGET INVALID`,
++        "alert",
++        "SYSTEM"
++      );
++      return;
++    }
++
+     const assetsRemaining = this.state.commander.assetsRemaining.get(assetName) ?? 0;
+     if (assetsRemaining <= 0) {
+-      this.state.addSignal(`DISPATCH FAILED: ${assetName} DEPLETED`, "alert", "SYSTEM");
++      this.emitSignal(`DISPATCH FAILED: ${assetName} DEPLETED`, "alert", "SYSTEM");
+       return;
+     }
+ 
+     this.state.commander.assetsRemaining.set(assetName, assetsRemaining - 1);
++    const cooldownMs = COMMANDER_DISPATCH_COOLDOWN_MS[assetName] ?? 0;
++    this.state.commander.assetCooldowns.set(assetName, now + cooldownMs);
++
++    const dispatchRecord = this.state.createDispatchRecord(assetName, targetId, now);
++    this.state.dispatchHistory.push(dispatchRecord);
++
+     console.log(`Commander dispatched ${assetName} on ${targetId}`);
+     // Validation and resolution will happen in the game loop
+-    this.state.addSignal(`DISPATCH: ${assetName}`, "nominal", "COMMANDER");
++    this.emitSignal(`DISPATCH: ${assetName} -> ${targetId}`, "nominal", "COMMANDER", dispatchRecord.id);
++    this.broadcastCommanderStatus(now);
+   }
+ 
+   private handleKaijuMove(leviathanId: string, heading: number) {
+@@ -367,7 +406,7 @@ export class MatchRoom extends Room<MatchSchema> {
+       leviathan.hp = Math.ceil(leviathan.hpMax * GAME_CONSTANTS.RESPAWN_HP_FRACTION);
+       leviathan.status = "ACTIVE";
+       console.log(`${leviathan.name} continued with ${leviathan.credits} credits remaining`);
+-      this.state.addSignal(
++      this.emitSignal(
+         `KAIJU ${leviathan.name} RESPAWNING - CREDIT USED`,
+         "nominal",
+         "SYSTEM"
+@@ -456,7 +495,7 @@ export class MatchRoom extends Room<MatchSchema> {
+     leviathan.playerId = sessionId;
+     leviathan.playerName = playerName;
+ 
+-    this.state.addSignal(
++    this.emitSignal(
+       `KAIJU ${leviathan.name} RECONNECTED - GRACE RECOVERY SUCCESS`,
+       "nominal",
+       "SYSTEM"
+@@ -475,7 +514,7 @@ export class MatchRoom extends Room<MatchSchema> {
+     const reconnectToken = this.issueReconnectToken(leviathan.id);
+ 
+     console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
+-    this.state.addSignal(
++    this.emitSignal(
+       `KAIJU ${leviathan.name} CONNECTION LOST - GRACE WINDOW ACTIVE`,
+       "alert",
+       "SYSTEM"
+@@ -496,7 +535,7 @@ export class MatchRoom extends Room<MatchSchema> {
+       const hasActiveController = latestLeviathan.playerId.length > 0;
+       if (!hasActiveController) {
+         this.promoteSlotToAI(latestLeviathan);
+-        this.state.addSignal(
++        this.emitSignal(
+           `KAIJU ${latestLeviathan.name} GRACE WINDOW EXPIRED - AI TAKEOVER`,
+           "alert",
+           "SYSTEM"
+@@ -548,8 +587,9 @@ export class MatchRoom extends Room<MatchSchema> {
+     console.log("Match starting...");
+     this.state.metadata.state = "ACTIVE";
+     this.state.metadata.startedAt = Date.now();
+-    this.state.addSignal("MATCH START", "nominal", "SYSTEM");
++    this.emitSignal("MATCH START", "nominal", "SYSTEM");
+     this.broadcastMatchStart();
++    this.broadcastCommanderStatus(this.state.metadata.startedAt);
+ 
+     // Start game loop: 5 Hz (200ms per tick)
+     this.lastTickTime = Date.now();
+@@ -579,6 +619,7 @@ export class MatchRoom extends Room<MatchSchema> {
+     const now = Date.now();
+     this.tickDeltaMs = now - this.lastTickTime;
+     this.lastTickTime = now;
++    const signalCountBeforeTick = this.state.signalFeed.length;
+ 
+     this.state.metadata.now = now;
+     this.state.metadata.tickCount++;
+@@ -599,6 +640,12 @@ export class MatchRoom extends Room<MatchSchema> {
+       now,
+     });
+ 
++    this.broadcastDispatchResults();
++
++    // Signals generated by tick execution are mirrored over room broadcasts for commander UI.
++    this.broadcastSignalsSince(signalCountBeforeTick);
++    this.broadcastCommanderStatus(now);
++
+     // Check win conditions
+     this.checkWinCondition();
+ 
+@@ -608,6 +655,117 @@ export class MatchRoom extends Room<MatchSchema> {
+     }
+   }
+ 
++  private emitSignal(
++    message: string,
++    severity: "nominal" | "alert" | "critical",
++    source: string,
++    dispatchId?: string
++  ) {
++    this.state.addSignal(message, severity, source, dispatchId ?? "");
++    const latestSignal = this.state.signalFeed[this.state.signalFeed.length - 1];
++    if (!latestSignal) {
++      return;
++    }
++
++    this.broadcastSignalEntry(
++      latestSignal.timestamp,
++      latestSignal.message,
++      latestSignal.severity,
++      latestSignal.dispatchId
++    );
++  }
++
++  private broadcastSignalsSince(startIndex: number) {
++    if (typeof this.broadcast !== "function" || this.state.signalFeed.length <= startIndex) {
++      return;
++    }
++
++    for (let i = startIndex; i < this.state.signalFeed.length; i++) {
++      const signal = this.state.signalFeed[i];
++      if (!signal) {
++        continue;
++      }
++
++      this.broadcastSignalEntry(signal.timestamp, signal.message, signal.severity, signal.dispatchId);
++    }
++  }
++
++  private broadcastSignalEntry(
++    timestamp: number,
++    message: string,
++    severity: string,
++    dispatchId?: string
++  ) {
++    if (typeof this.broadcast !== "function") {
++      return;
++    }
++
++    this.broadcast("signal.feed", {
++      type: "signal.feed",
++      timestamp,
++      message,
++      severity,
++      ...(dispatchId ? { dispatchId } : {}),
++    });
++  }
++
++  private broadcastCommanderStatus(timestamp: number) {
++    if (typeof this.broadcast !== "function") {
++      return;
++    }
++
++    const assetCooldownsMsRemaining: Record<string, number> = {};
++    const assetCooldownsReady: Record<string, boolean> = {};
++    const assetCooldownsProgress: Record<string, number> = {};
++    for (const [assetName, readyAt] of this.state.commander.assetCooldowns.entries()) {
++      const remainingMs = Math.max(0, readyAt - timestamp);
++      const cooldownMs = COMMANDER_DISPATCH_COOLDOWN_MS[assetName] ?? 0;
++      const normalizedProgress = cooldownMs <= 0
++        ? 1
++        : Math.max(0, Math.min(1, (cooldownMs - remainingMs) / cooldownMs));
++
++      assetCooldownsMsRemaining[assetName] = remainingMs;
++      assetCooldownsReady[assetName] = remainingMs === 0;
++      assetCooldownsProgress[assetName] = normalizedProgress;
++    }
++
++    this.broadcast("commander.status", {
++      type: "commander.status",
++      timestamp,
++      selectedLeviathanId: this.state.commander.selectedLeviathanId,
++      assetsRemaining: Object.fromEntries(this.state.commander.assetsRemaining),
++      assetCooldownsMsRemaining,
++      assetCooldownsReady,
++      assetCooldownsProgress,
++      activeBarriers: this.state.activeBarriers.length,
++      commanderScore: this.state.metadata.commanderScore,
++      cityBaseHp: this.state.cityBase.hp,
++    });
++  }
++
++  private broadcastDispatchResults() {
++    if (typeof this.broadcast !== "function") {
++      return;
++    }
++
++    for (const dispatch of this.state.dispatchHistory) {
++      if (dispatch.resolvedAt <= 0 || dispatch.applied) {
++        continue;
++      }
++
++      this.broadcast("commander.dispatch.result", {
++        type: "commander.dispatch.result",
++        dispatchId: dispatch.id,
++        assetName: dispatch.assetName,
++        targetId: dispatch.targetId,
++        outcome: dispatch.outcome,
++        resolvedAt: dispatch.resolvedAt,
++      });
++
++      dispatch.applied = true;
++    }
++  }
++
+   private checkWinCondition(): boolean {
+     if (this.state.areAllLeviathansCaught()) {
+       console.log("Commander victory - all kaiju contained");
+diff --git a/src/index.test.ts b/src/index.test.ts
+index d7058c3..8bbf459 100644
+--- a/src/index.test.ts
++++ b/src/index.test.ts
+@@ -126,6 +126,15 @@ describe("API /api/matches", () => {
+     });
+   });
+ 
++  it("serves the commander console scaffold", async () => {
++    const { app } = await import("./index");
++
++    const response = await request(app).get("/commander/index.html");
++
++    expect(response.status).toBe(200);
++    expect(response.text).toContain("COMMANDER CONSOLE");
++  });
++
+   it("returns 400 when create fails", async () => {
+     mockCreate.mockRejectedValue(new Error("create failed"));
+ 
+diff --git a/src/index.ts b/src/index.ts
+index 62d877f..bd74491 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -7,6 +7,7 @@
+ 
+ import express from "express";
+ import { createServer } from "http";
++import path from "path";
+ import { Server as ColyseusServer } from "colyseus";
+ import { matchMaker } from "colyseus";
+ import { WebSocketTransport } from "@colyseus/ws-transport";
+@@ -28,6 +29,10 @@ const portNum = typeof port === "string" ? parseInt(port, 10) : port;
+ 
+ // Middleware
+ app.use(express.json());
++app.use(
++  "/commander",
++  express.static(path.resolve(__dirname, "../public/commander"))
++);
+ 
+ // Health check endpoint
+ app.get("/health", (_req, res) => {
+diff --git a/src/messages/protocol.ts b/src/messages/protocol.ts
+index 4b57d18..928e671 100644
+--- a/src/messages/protocol.ts
++++ b/src/messages/protocol.ts
+@@ -65,6 +65,29 @@ export interface SignalFeedEvent {
+   timestamp: number;
+   message: string;
+   severity: "nominal" | "alert" | "critical";
++  dispatchId?: string;
++}
++
++export interface CommanderStatusEvent {
++  type: "commander.status";
++  timestamp: number;
++  selectedLeviathanId: string;
++  assetsRemaining: Record<string, number>;
++  assetCooldownsMsRemaining: Record<string, number>;
++  assetCooldownsReady: Record<string, boolean>;
++  assetCooldownsProgress: Record<string, number>;
++  activeBarriers: number;
++  commanderScore: number;
++  cityBaseHp: number;
++}
++
++export interface CommanderDispatchResultEvent {
++  type: "commander.dispatch.result";
++  dispatchId: string;
++  assetName: string;
++  targetId: string;
++  outcome: "SUCCESS" | "PARTIAL" | "FAILED" | "UNVERIFIED";
++  resolvedAt: number;
+ }
+ 
+ export interface MatchResultEvent {
+@@ -106,6 +129,8 @@ export interface GameStateUpdateEvent {
+ export type ServerEvent =
+   | KaijuContainedSignal
+   | SignalFeedEvent
++  | CommanderStatusEvent
++  | CommanderDispatchResultEvent
+   | MatchResultEvent
+   | MatchStartEvent
+   | KaijuReconnectTokenEvent
+diff --git a/src/schema/MatchSchema.test.ts b/src/schema/MatchSchema.test.ts
+index 8f06f52..c63dc89 100644
+--- a/src/schema/MatchSchema.test.ts
++++ b/src/schema/MatchSchema.test.ts
+@@ -14,6 +14,11 @@ describe("CommanderStateSchema", () => {
+     expect(commander.assetsRemaining.get("Deploy Mechs")).toBe(3);
+     expect(commander.assetsRemaining.get("Raise Barrier")).toBe(4);
+     expect(commander.assetsRemaining.get("Evac Sector")).toBe(2);
++
++    expect(commander.assetCooldowns.get("Scramble Jets")).toBe(0);
++    expect(commander.assetCooldowns.get("Deploy Mechs")).toBe(0);
++    expect(commander.assetCooldowns.get("Raise Barrier")).toBe(0);
++    expect(commander.assetCooldowns.get("Evac Sector")).toBe(0);
+   });
+ 
+   it("serializes and deserializes snapshot state without data loss", () => {
+@@ -33,6 +38,7 @@ describe("CommanderStateSchema", () => {
+     state.commander.playerName = "Commander";
+     state.commander.selectedLeviathanId = "lev-1";
+     state.commander.assetsRemaining.set("Scramble Jets", 2);
++    state.commander.assetCooldowns.set("Scramble Jets", 55_000);
+ 
+     const leviathan = new LeviathanSchema();
+     leviathan.id = "lev-1";
+@@ -56,7 +62,7 @@ describe("CommanderStateSchema", () => {
+     barrier.expiresAt = 200;
+     state.activeBarriers.push(barrier);
+ 
+-    state.addSignal("MATCH START", "nominal", "SYSTEM");
++    state.addSignal("MATCH START", "nominal", "SYSTEM", "dispatch-1");
+ 
+     const serialized = state.serializeSnapshot();
+     const hydrated = MatchSchema.deserializeSnapshot(serialized);
+@@ -66,6 +72,7 @@ describe("CommanderStateSchema", () => {
+     expect(hydrated.cityBase.cityName).toBe("Neo Tokyo");
+     expect(hydrated.commander.playerName).toBe("Commander");
+     expect(hydrated.commander.assetsRemaining.get("Scramble Jets")).toBe(2);
++    expect(hydrated.commander.assetCooldowns.get("Scramble Jets")).toBe(55_000);
+     expect(hydrated.leviathans.length).toBe(1);
+     expect(hydrated.leviathans[0].id).toBe("lev-1");
+     expect(hydrated.dispatchHistory.length).toBe(1);
+@@ -73,5 +80,6 @@ describe("CommanderStateSchema", () => {
+     expect(hydrated.activeBarriers.length).toBe(1);
+     expect(hydrated.signalFeed.length).toBe(1);
+     expect(hydrated.signalFeed[0].message).toBe("MATCH START");
++    expect(hydrated.signalFeed[0].dispatchId).toBe("dispatch-1");
+   });
+ });
+diff --git a/src/schema/MatchSchema.ts b/src/schema/MatchSchema.ts
+index fb6ae9f..7bd67b0 100644
+--- a/src/schema/MatchSchema.ts
++++ b/src/schema/MatchSchema.ts
+@@ -161,6 +161,9 @@ export class SignalFeedEntrySchema extends Schema {
+ 
+   @type("string")
+   source: string = ""; // "SYSTEM", "KAIJU_NAME", etc.
++
++  @type("string")
++  dispatchId: string = "";
+ }
+ 
+ /**
+@@ -217,6 +220,14 @@ export class CommanderStateSchema extends Schema {
+     "Raise Barrier": 4,
+     "Evac Sector": 2,
+   });
++
++  @type({ map: "number" })
++  assetCooldowns = new MapSchema<number>({
++    "Scramble Jets": 0,
++    "Deploy Mechs": 0,
++    "Raise Barrier": 0,
++    "Evac Sector": 0,
++  });
+ }
+ 
+ /**
+@@ -269,12 +280,18 @@ export class MatchSchema extends Schema {
+   /**
+    * Helper: Add signal feed entry
+    */
+-  addSignal(message: string, severity: string = "nominal", source: string = "SYSTEM"): void {
++  addSignal(
++    message: string,
++    severity: string = "nominal",
++    source: string = "SYSTEM",
++    dispatchId: string = ""
++  ): void {
+     const entry = new SignalFeedEntrySchema();
+     entry.timestamp = this.metadata.now;
+     entry.message = message;
+     entry.severity = severity;
+     entry.source = source;
++    entry.dispatchId = dispatchId;
+     this.signalFeed.push(entry);
+ 
+     // Keep signal feed bounded (max 100 entries)
+@@ -283,6 +300,39 @@ export class MatchSchema extends Schema {
+     }
+   }
+ 
++  /**
++   * Build a dispatch record with a randomized server-side resolution delay.
++   */
++  createDispatchRecord(assetName: string, targetId: string, dispatchedAt: number): DispatchRecordSchema {
++    const delayMin = GAME_CONSTANTS.ASSET_DELAY_RANGE_MS[0];
++    const delayMax = GAME_CONSTANTS.ASSET_DELAY_RANGE_MS[1];
++    const delayMs = delayMin + Math.floor(Math.random() * (delayMax - delayMin + 1));
++
++    const record = new DispatchRecordSchema();
++    record.id = `${assetName.toLowerCase().replace(/\s+/g, "-")}-${dispatchedAt}-${targetId}`;
++    record.assetName = assetName;
++    record.targetId = targetId;
++    record.dispatchedAt = dispatchedAt;
++    record.resolvedAt = 0;
++    record.outcome = "PENDING";
++    record.delayMs = delayMs;
++    record.applied = false;
++
++    return record;
++  }
++
++  /**
++   * Create a barrier instance for Raise Barrier mitigation effects.
++   */
++  createBarrier(createdAt: number, expiresAt: number): BarrierSchema {
++    const barrier = new BarrierSchema();
++    barrier.id = `barrier-${createdAt}`;
++    barrier.createdAt = createdAt;
++    barrier.expiresAt = expiresAt;
++    barrier.damageAbsorbed = 0;
++    return barrier;
++  }
++
+   /**
+    * Serialize the current match state into a JSON-safe snapshot.
+    */
+@@ -314,6 +364,7 @@ export class MatchSchema extends Schema {
+         playerName: this.commander.playerName,
+         selectedLeviathanId: this.commander.selectedLeviathanId,
+         assetsRemaining: Object.fromEntries(this.commander.assetsRemaining),
++        assetCooldowns: Object.fromEntries(this.commander.assetCooldowns),
+       },
+       leviathans: this.leviathans.map((leviathan: LeviathanSchema) => ({
+         id: leviathan.id,
+@@ -350,6 +401,7 @@ export class MatchSchema extends Schema {
+         message: signal.message,
+         severity: signal.severity,
+         source: signal.source,
++        dispatchId: signal.dispatchId,
+       })),
+       activeBarriers: this.activeBarriers.map((barrier: BarrierSchema) => ({
+         id: barrier.id,
+@@ -399,6 +451,10 @@ export class MatchSchema extends Schema {
+     for (const [assetName, count] of Object.entries(snapshot.commander.assetsRemaining)) {
+       state.commander.assetsRemaining.set(assetName, count);
+     }
++    state.commander.assetCooldowns.clear();
++    for (const [assetName, cooldownAt] of Object.entries(snapshot.commander.assetCooldowns)) {
++      state.commander.assetCooldowns.set(assetName, cooldownAt);
++    }
+ 
+     state.leviathans.clear();
+     for (const leviathanSnapshot of snapshot.leviathans) {
+@@ -445,6 +501,7 @@ export class MatchSchema extends Schema {
+       signal.message = signalSnapshot.message;
+       signal.severity = signalSnapshot.severity;
+       signal.source = signalSnapshot.source;
++      signal.dispatchId = signalSnapshot.dispatchId;
+       state.signalFeed.push(signal);
+     }
+ 
+@@ -508,6 +565,7 @@ export interface CommanderSnapshot {
+   playerName: string;
+   selectedLeviathanId: string;
+   assetsRemaining: Record<string, number>;
++  assetCooldowns: Record<string, number>;
+ }
+ 
+ export interface LeviathanSnapshot {
+@@ -547,6 +605,7 @@ export interface SignalFeedEntrySnapshot {
+   message: string;
+   severity: string;
+   source: string;
++  dispatchId: string;
+ }
+ 
+ export interface BarrierSnapshot {
+diff --git a/src/utils/types.test.ts b/src/utils/types.test.ts
+new file mode 100644
+index 0000000..2be272a
+--- /dev/null
++++ b/src/utils/types.test.ts
+@@ -0,0 +1,63 @@
++import {
++  isCommanderStatusEventModel,
++  isSignalFeedEventModel,
++} from "./types";
++
++describe("Commander frontend event models", () => {
++  it("accepts a valid commander.status payload", () => {
++    const payload = {
++      type: "commander.status",
++      timestamp: Date.now(),
++      selectedLeviathanId: "lev-1",
++      assetsRemaining: { "Scramble Jets": 4 },
++      assetCooldownsMsRemaining: { "Scramble Jets": 1200 },
++      assetCooldownsReady: { "Scramble Jets": false },
++      assetCooldownsProgress: { "Scramble Jets": 0.8 },
++      activeBarriers: 1,
++      commanderScore: 120,
++      cityBaseHp: 450,
++    };
++
++    expect(isCommanderStatusEventModel(payload)).toBe(true);
++  });
++
++  it("rejects invalid commander.status payload", () => {
++    const payload = {
++      type: "commander.status",
++      timestamp: Date.now(),
++      selectedLeviathanId: "lev-1",
++      assetsRemaining: { "Scramble Jets": "4" },
++      assetCooldownsMsRemaining: { "Scramble Jets": 1200 },
++      assetCooldownsReady: { "Scramble Jets": false },
++      assetCooldownsProgress: { "Scramble Jets": 0.8 },
++      activeBarriers: 1,
++      commanderScore: 120,
++      cityBaseHp: 450,
++    };
++
++    expect(isCommanderStatusEventModel(payload)).toBe(false);
++  });
++
++  it("accepts a valid signal.feed payload", () => {
++    const payload = {
++      type: "signal.feed",
++      timestamp: Date.now(),
++      message: "DISPATCH: Scramble Jets -> lev-1",
++      severity: "nominal",
++      dispatchId: "dispatch-1",
++    };
++
++    expect(isSignalFeedEventModel(payload)).toBe(true);
++  });
++
++  it("rejects invalid signal.feed payload", () => {
++    const payload = {
++      type: "signal.feed",
++      timestamp: Date.now(),
++      message: "DISPATCH FAILED",
++      severity: "unknown",
++    };
++
++    expect(isSignalFeedEventModel(payload)).toBe(false);
++  });
++});
+diff --git a/src/utils/types.ts b/src/utils/types.ts
+index bfcc2ef..787b862 100644
+--- a/src/utils/types.ts
++++ b/src/utils/types.ts
+@@ -59,6 +59,96 @@ export interface ServerEventPayload {
+   [key: string]: unknown;
+ }
+ 
++/**
++ * Commander frontend event models (server broadcast payloads)
++ */
++export interface SignalFeedEventModel {
++  type: "signal.feed";
++  timestamp: number;
++  message: string;
++  severity: "nominal" | "alert" | "critical";
++  dispatchId?: string;
++}
++
++export interface CommanderStatusEventModel {
++  type: "commander.status";
++  timestamp: number;
++  selectedLeviathanId: string;
++  assetsRemaining: Record<string, number>;
++  assetCooldownsMsRemaining: Record<string, number>;
++  assetCooldownsReady: Record<string, boolean>;
++  assetCooldownsProgress: Record<string, number>;
++  activeBarriers: number;
++  commanderScore: number;
++  cityBaseHp: number;
++}
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null;
++}
++
++function isNumberRecord(value: unknown): value is Record<string, number> {
++  if (!isRecord(value)) {
++    return false;
++  }
++
++  return Object.values(value).every(
++    (entry) => typeof entry === "number" && Number.isFinite(entry)
++  );
++}
++
++function isBooleanRecord(value: unknown): value is Record<string, boolean> {
++  if (!isRecord(value)) {
++    return false;
++  }
++
++  return Object.values(value).every((entry) => typeof entry === "boolean");
++}
++
++/**
++ * Runtime guard for commander status payloads.
++ */
++export function isCommanderStatusEventModel(
++  payload: unknown
++): payload is CommanderStatusEventModel {
++  if (!isRecord(payload) || payload.type !== "commander.status") {
++    return false;
++  }
++
++  return (
++    typeof payload.timestamp === "number" &&
++    typeof payload.selectedLeviathanId === "string" &&
++    isNumberRecord(payload.assetsRemaining) &&
++    isNumberRecord(payload.assetCooldownsMsRemaining) &&
++    isBooleanRecord(payload.assetCooldownsReady) &&
++    isNumberRecord(payload.assetCooldownsProgress) &&
++    typeof payload.activeBarriers === "number" &&
++    typeof payload.commanderScore === "number" &&
++    typeof payload.cityBaseHp === "number"
++  );
++}
++
++/**
++ * Runtime guard for signal feed payloads.
++ */
++export function isSignalFeedEventModel(payload: unknown): payload is SignalFeedEventModel {
++  if (!isRecord(payload) || payload.type !== "signal.feed") {
++    return false;
++  }
++
++  const hasValidSeverity =
++    payload.severity === "nominal" ||
++    payload.severity === "alert" ||
++    payload.severity === "critical";
++
++  return (
++    typeof payload.timestamp === "number" &&
++    typeof payload.message === "string" &&
++    hasValidSeverity &&
++    (payload.dispatchId === undefined || typeof payload.dispatchId === "string")
++  );
++}
++
+ /**
+  * Commander display state
+  */
+]]></full-diff>
+</pr-reference>

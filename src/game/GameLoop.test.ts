@@ -89,4 +89,34 @@ describe("GameLoop determinism", () => {
 
     expect(state.leviathans[0].status).toBe("CONTAINED");
   });
+
+  it("resolves sniper submerge ability and emits an ability result", () => {
+    const state = buildState();
+    state.leviathans[0].archetype = "Sniper";
+    state.leviathans[0].pendingAbilityId = "submerge";
+
+    executeTick({ state, deltaMs: 200, tickCount: 4, now: 6_000 });
+
+    expect(state.leviathans[0].status).toBe("SUBMERGED");
+    expect(state.leviathans[0].abilityCooldownEndsAt).toBeGreaterThan(6_000);
+    expect(state.kaijuAbilityResults.length).toBe(1);
+    expect(state.kaijuAbilityResults[0].outcome).toBe("APPLIED");
+  });
+
+  it("applies reduced mitigation damage to fortified leviathans", () => {
+    const state = buildState();
+    const target = state.leviathans[0];
+    target.status = "FORTIFIED";
+    target.hp = 100;
+
+    const dispatch = state.createDispatchRecord("Deploy Mechs", target.id, 8_000);
+    dispatch.delayMs = 0;
+    state.dispatchHistory.push(dispatch);
+
+    executeTick({ state, deltaMs: 200, tickCount: 5, now: 8_200 });
+
+    if (["SUCCESS", "PARTIAL"].includes(state.dispatchHistory[0].outcome)) {
+      expect(target.hp).toBeGreaterThanOrEqual(76);
+    }
+  });
 });

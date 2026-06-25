@@ -33,6 +33,10 @@ app.use(
   "/commander",
   express.static(path.resolve(__dirname, "../public/commander"))
 );
+app.use(
+  "/kaiju",
+  express.static(path.resolve(__dirname, "../public/kaiju"))
+);
 
 // Health check endpoint
 app.get("/health", (_req, res) => {
@@ -115,6 +119,42 @@ app.get("/api/matches", async (_req, res) => {
     res.json({ matches, total: matches.length });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// REST API: Reserve Kaiju seat for a specific room (mobile-friendly join helper)
+app.post("/api/matches/:roomId/kaiju-join", async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    if (!roomId) {
+      res.status(400).json({ error: "roomId is required" });
+      return;
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const options: Record<string, unknown> = {
+      ...(typeof body.playerName === "string" ? { playerName: body.playerName } : {}),
+      ...(typeof body.reconnectToken === "string" ? { reconnectToken: body.reconnectToken } : {}),
+    };
+
+    const reservation = await matchMaker.joinById(roomId, options);
+    res.json({
+      roomName: "match",
+      sessionId: reservation.sessionId,
+      roomId: reservation.roomId,
+      processId: reservation.processId,
+      publicAddress: reservation.publicAddress,
+      wsEndpoint: `ws://${hostname}:${portNum}`,
+      reconnect: {
+        enabled: true,
+        tokenRequired: true,
+        graceWindowMs: 30_000,
+        optionKey: "reconnectToken",
+      },
+      message: "Kaiju seat reserved. Join with consumeSeatReservation.",
+    });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
   }
 });
 

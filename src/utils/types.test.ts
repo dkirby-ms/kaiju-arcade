@@ -1,5 +1,6 @@
 import {
   isCommanderStatusEventModel,
+  isKaijuAbilityResultEventModel,
   isSignalFeedEventModel,
 } from "./types";
 
@@ -59,5 +60,33 @@ describe("Commander frontend event models", () => {
     };
 
     expect(isSignalFeedEventModel(payload)).toBe(false);
+  });
+
+  it("accepts a valid kaiju.ability.result payload", () => {
+    const payload = {
+      type: "kaiju.ability.result",
+      resultId: "ability-1",
+      leviathanId: "lev-1",
+      abilityId: "submerge",
+      outcome: "APPLIED",
+      message: "ABILITY APPLIED",
+      resolvedAt: Date.now(),
+    };
+
+    expect(isKaijuAbilityResultEventModel(payload)).toBe(true);
+  });
+
+  it("rejects invalid kaiju.ability.result payload", () => {
+    const payload = {
+      type: "kaiju.ability.result",
+      resultId: "ability-1",
+      leviathanId: "lev-1",
+      abilityId: "submerge",
+      outcome: "UNKNOWN",
+      message: "ABILITY APPLIED",
+      resolvedAt: Date.now(),
+    };
+
+    expect(isKaijuAbilityResultEventModel(payload)).toBe(false);
   });
 });

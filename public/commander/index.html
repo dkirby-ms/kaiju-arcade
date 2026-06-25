@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kaiju Arcade Commander Console</title>
     <link rel="stylesheet" href="/commander/styles.css" />
-    <script src="https://unpkg.com/colyseus.js@0.15.14/dist/colyseus.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/colyseus.js@0.16.20/dist/colyseus.js"></script>
   </head>
   <body>
     <main class="console-shell">
@@ -30,6 +32,10 @@
 
       <section class="panel status-panel">
         <h2>COMMAND STATUS</h2>
+        <div class="status-toolbar">
+          <button id="alertModeToggle" type="button">ALERT MODE: OFF</button>
+          <strong id="alertModeState">NOMINAL</strong>
+        </div>
         <div class="status-grid">
           <div>
             <span>BASE HP</span>
@@ -47,6 +53,14 @@
             <span>SELECTED TARGET</span>
             <strong id="selectedTarget">-</strong>
           </div>
+        </div>
+      </section>
+
+      <section class="panel map-panel">
+        <h2>COMMAND MAP</h2>
+        <div class="map-canvas-wrapper">
+          <div id="leafletMap"></div>
+          <canvas id="radarOverlay"></canvas>
         </div>
       </section>
 
@@ -68,6 +82,21 @@
       <section class="panel feed-panel">
         <h2>SIGNAL FEED</h2>
         <ul id="signalFeed"></ul>
+      </section>
+
+      <section class="panel feed-panel">
+        <h2>MATCH TIMELINE</h2>
+        <div class="status-grid compact">
+          <div>
+            <span>ELAPSED</span>
+            <strong id="matchElapsed">00:00</strong>
+          </div>
+          <div>
+            <span>ETA TO BASE</span>
+            <strong id="etaToBase">N/A</strong>
+          </div>
+        </div>
+        <ul id="timelineFeed"></ul>
       </section>
 
       <section class="panel feed-panel">

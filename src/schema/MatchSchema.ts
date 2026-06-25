@@ -46,13 +46,28 @@ export class LeviathanSchema extends Schema {
   statusEndTime: number = 0; // Timestamp when status effect expires
 
   @type("number")
+  containedAt: number = 0; // Timestamp when CONTAINED was applied
+
+  @type("number")
   lastAttackTime: number = 0; // Timestamp of last attack (for cooldown)
+
+  @type("number")
+  abilityCooldownEndsAt: number = 0; // Timestamp when ability can be used again
+
+  @type("string")
+  pendingAbilityId: string = ""; // Ability requested by client, resolved on next tick
+
+  @type("number")
+  pendingAbilityRequestedAt: number = 0;
 
   @type("number")
   credits: number = 3; // INSERT COIN system - credits remaining
 
   @type("boolean")
   isAI: boolean = false; // Is this an AI-controlled kaiju?
+
+  @type("boolean")
+  isSpectator: boolean = false; // True when continue window expires with no credits
 
   @type("string")
   playerId: string = ""; // Session ID of controlling player (empty if AI)
@@ -146,6 +161,33 @@ export class DispatchRecordSchema extends Schema {
 }
 
 /**
+ * Kaiju Ability Result Record
+ * Tick-resolved ability outcomes for client feedback
+ */
+export class KaijuAbilityResultSchema extends Schema {
+  @type("string")
+  id: string = "";
+
+  @type("string")
+  leviathanId: string = "";
+
+  @type("string")
+  abilityId: string = "";
+
+  @type("string")
+  outcome: string = ""; // APPLIED, REJECTED, UNVERIFIED
+
+  @type("string")
+  message: string = "";
+
+  @type("number")
+  resolvedAt: number = 0;
+
+  @type("boolean")
+  applied: boolean = false;
+}
+
+/**
  * Signal Feed Entry
  * Event log entry displayed to Commander
  */
@@ -214,20 +256,24 @@ export class CommanderStateSchema extends Schema {
   selectedLeviathanId: string = ""; // Currently selected kaiju for dispatch
 
   @type({ map: "number" })
-  assetsRemaining = new MapSchema<number>({
-    "Scramble Jets": 5,
-    "Deploy Mechs": 3,
-    "Raise Barrier": 4,
-    "Evac Sector": 2,
-  });
+  assetsRemaining = new MapSchema<number>();
 
   @type({ map: "number" })
-  assetCooldowns = new MapSchema<number>({
-    "Scramble Jets": 0,
-    "Deploy Mechs": 0,
-    "Raise Barrier": 0,
-    "Evac Sector": 0,
-  });
+  assetCooldowns = new MapSchema<number>();
+
+  constructor() {
+    super();
+
+    this.assetsRemaining.set("Scramble Jets", 5);
+    this.assetsRemaining.set("Deploy Mechs", 3);
+    this.assetsRemaining.set("Raise Barrier", 4);
+    this.assetsRemaining.set("Evac Sector", 2);
+
+    this.assetCooldowns.set("Scramble Jets", 0);
+    this.assetCooldowns.set("Deploy Mechs", 0);
+    this.assetCooldowns.set("Raise Barrier", 0);
+    this.assetCooldowns.set("Evac Sector", 0);
+  }
 }
 
 /**
@@ -249,6 +295,9 @@ export class MatchSchema extends Schema {
 
   @type([DispatchRecordSchema])
   dispatchHistory: ArraySchema<DispatchRecordSchema> = new ArraySchema();
+
+  @type([KaijuAbilityResultSchema])
+  kaijuAbilityResults: ArraySchema<KaijuAbilityResultSchema> = new ArraySchema();
 
   @type([SignalFeedEntrySchema])
   signalFeed: ArraySchema<SignalFeedEntrySchema> = new ArraySchema();
@@ -334,6 +383,33 @@ export class MatchSchema extends Schema {
   }
 
   /**
+   * Create and append a Kaiju ability result record for client-facing feedback.
+   */
+  addKaijuAbilityResult(
+    leviathanId: string,
+    abilityId: string,
+    outcome: string,
+    message: string,
+    resolvedAt: number
+  ): KaijuAbilityResultSchema {
+    const result = new KaijuAbilityResultSchema();
+    result.id = `ability-${leviathanId}-${resolvedAt}-${abilityId}`;
+    result.leviathanId = leviathanId;
+    result.abilityId = abilityId;
+    result.outcome = outcome;
+    result.message = message;
+    result.resolvedAt = resolvedAt;
+    result.applied = false;
+    this.kaijuAbilityResults.push(result);
+
+    if (this.kaijuAbilityResults.length > 100) {
+      this.kaijuAbilityResults.shift();
+    }
+
+    return result;
+  }
+
+  /**
    * Serialize the current match state into a JSON-safe snapshot.
    */
   toSnapshot(): MatchSnapshot {
@@ -378,9 +454,14 @@ export class MatchSchema extends Schema {
         speed: leviathan.speed,
         status: leviathan.status,
         statusEndTime: leviathan.statusEndTime,
+        containedAt: leviathan.containedAt,
         lastAttackTime: leviathan.lastAttackTime,
+        abilityCooldownEndsAt: leviathan.abilityCooldownEndsAt,
+        pendingAbilityId: leviathan.pendingAbilityId,
+        pendingAbilityRequestedAt: leviathan.pendingAbilityRequestedAt,
         credits: leviathan.credits,
         isAI: leviathan.isAI,
+        isSpectator: leviathan.isSpectator,
         playerId: leviathan.playerId,
         playerName: leviathan.playerName,
         damageDealt: leviathan.damageDealt,
@@ -395,6 +476,15 @@ export class MatchSchema extends Schema {
         outcome: dispatch.outcome,
         delayMs: dispatch.delayMs,
         applied: dispatch.applied,
+      })),
+      kaijuAbilityResults: this.kaijuAbilityResults.map((result: KaijuAbilityResultSchema) => ({
+        id: result.id,
+        leviathanId: result.leviathanId,
+        abilityId: result.abilityId,
+        outcome: result.outcome,
+        message: result.message,
+        resolvedAt: result.resolvedAt,
+        applied: result.applied,
       })),
       signalFeed: this.signalFeed.map((signal: SignalFeedEntrySchema) => ({
         timestamp: signal.timestamp,
@@ -470,9 +560,14 @@ export class MatchSchema extends Schema {
       leviathan.speed = leviathanSnapshot.speed;
       leviathan.status = leviathanSnapshot.status;
       leviathan.statusEndTime = leviathanSnapshot.statusEndTime;
+      leviathan.containedAt = leviathanSnapshot.containedAt;
       leviathan.lastAttackTime = leviathanSnapshot.lastAttackTime;
+      leviathan.abilityCooldownEndsAt = leviathanSnapshot.abilityCooldownEndsAt;
+      leviathan.pendingAbilityId = leviathanSnapshot.pendingAbilityId;
+      leviathan.pendingAbilityRequestedAt = leviathanSnapshot.pendingAbilityRequestedAt;
       leviathan.credits = leviathanSnapshot.credits;
       leviathan.isAI = leviathanSnapshot.isAI;
+      leviathan.isSpectator = leviathanSnapshot.isSpectator;
       leviathan.playerId = leviathanSnapshot.playerId;
       leviathan.playerName = leviathanSnapshot.playerName;
       leviathan.damageDealt = leviathanSnapshot.damageDealt;
@@ -492,6 +587,19 @@ export class MatchSchema extends Schema {
       dispatch.delayMs = dispatchSnapshot.delayMs;
       dispatch.applied = dispatchSnapshot.applied;
       state.dispatchHistory.push(dispatch);
+    }
+
+    state.kaijuAbilityResults.clear();
+    for (const resultSnapshot of snapshot.kaijuAbilityResults) {
+      const result = new KaijuAbilityResultSchema();
+      result.id = resultSnapshot.id;
+      result.leviathanId = resultSnapshot.leviathanId;
+      result.abilityId = resultSnapshot.abilityId;
+      result.outcome = resultSnapshot.outcome;
+      result.message = resultSnapshot.message;
+      result.resolvedAt = resultSnapshot.resolvedAt;
+      result.applied = resultSnapshot.applied;
+      state.kaijuAbilityResults.push(result);
     }
 
     state.signalFeed.clear();
@@ -533,6 +641,7 @@ export interface MatchSnapshot {
   commander: CommanderSnapshot;
   leviathans: LeviathanSnapshot[];
   dispatchHistory: DispatchRecordSnapshot[];
+  kaijuAbilityResults: KaijuAbilityResultSnapshot[];
   signalFeed: SignalFeedEntrySnapshot[];
   activeBarriers: BarrierSnapshot[];
 }
@@ -580,9 +689,14 @@ export interface LeviathanSnapshot {
   speed: number;
   status: string;
   statusEndTime: number;
+  containedAt: number;
   lastAttackTime: number;
+  abilityCooldownEndsAt: number;
+  pendingAbilityId: string;
+  pendingAbilityRequestedAt: number;
   credits: number;
   isAI: boolean;
+  isSpectator: boolean;
   playerId: string;
   playerName: string;
   damageDealt: number;
@@ -597,6 +711,16 @@ export interface DispatchRecordSnapshot {
   resolvedAt: number;
   outcome: string;
   delayMs: number;
+  applied: boolean;
+}
+
+export interface KaijuAbilityResultSnapshot {
+  id: string;
+  leviathanId: string;
+  abilityId: string;
+  outcome: string;
+  message: string;
+  resolvedAt: number;
   applied: boolean;
 }
 
@@ -659,4 +783,14 @@ export const GAME_CONSTANTS = {
   // Status effects
   SUBMERGED_DURATION_MS: 5000,
   SUBMERGED_DAMAGE_ADJUSTMENT: 0.6,
+  FRENZY_DURATION_MS: 4_000,
+  FORTRESS_DURATION_MS: 5_000,
+  ROAR_RADIUS_UNITS: 22,
+  ROAR_PUSH_UNITS: 7,
+  ABILITY_COOLDOWNS_MS: {
+    submerge: 8_000,
+    roar: 7_000,
+    frenzy: 6_000,
+    fortress: 9_000,
+  },
 };

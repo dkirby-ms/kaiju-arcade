@@ -9,9 +9,6 @@ import { Room, Client } from "colyseus";
 import {
   MatchSchema,
   LeviathanSchema,
-  CommanderStateSchema,
-  CityBaseSchema,
-  MatchMetadataSchema,
   GAME_CONSTANTS,
 } from "../schema/MatchSchema";
 import {
@@ -99,6 +96,7 @@ export class MatchRoom extends Room<MatchSchema> {
   private tickIntervalId?: NodeJS.Timeout;
   private lastTickTime: number = 0;
   private tickDeltaMs: number = 0;
+  private containedEventLedger: Map<string, number> = new Map();
 
   onCreate(options: Record<string, unknown>) {
     console.log("MatchRoom created");
@@ -107,13 +105,11 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state = new MatchSchema();
 
     // Initialize metadata
-    this.state.metadata = new MatchMetadataSchema();
     this.state.metadata.matchId = uuid();
     this.state.metadata.startedAt = Date.now();
     this.state.metadata.state = "WAITING";
 
     // Initialize city base from options or use default
-    this.state.cityBase = new CityBaseSchema();
     this.state.cityBase.id = uuid();
     this.state.cityBase.cityName = selectCityBase(options.cityName as string | undefined);
     this.state.cityBase.hp = GAME_CONSTANTS.CITY_BASE_HP;
@@ -122,7 +118,11 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state.cityBase.y = 50;
 
     // Initialize commander state (placeholder, will be assigned on onJoin)
-    this.state.commander = new CommanderStateSchema();
+    this.state.commander.playerId = "";
+    this.state.commander.playerName = "";
+    this.state.commander.selectedLeviathanId = "";
+    this.state.commander.assetsRemaining.clear();
+    this.state.commander.assetCooldowns.clear();
 
     // Initialize asset cooldowns
     for (const [assetName, count] of Object.entries(COMMANDER_ASSET_STARTING_COUNTS)) {
@@ -378,14 +378,14 @@ export class MatchRoom extends Room<MatchSchema> {
 
   private handleKaijuMove(leviathanId: string, heading: number) {
     const leviathan = this.state.getLeviathan(leviathanId);
-    if (leviathan) {
+    if (leviathan && !leviathan.isSpectator && leviathan.status !== "CONTAINED") {
       leviathan.heading = heading;
     }
   }
 
   private handleKaijuAttack(leviathanId: string) {
     const leviathan = this.state.getLeviathan(leviathanId);
-    if (leviathan) {
+    if (leviathan && !leviathan.isSpectator && leviathan.status !== "CONTAINED") {
       console.log(`${leviathan.name} attacking base`);
       // Damage resolution in game loop
     }
@@ -394,17 +394,78 @@ export class MatchRoom extends Room<MatchSchema> {
   private handleKaijuAbility(leviathanId: string, abilityId: string) {
     const leviathan = this.state.getLeviathan(leviathanId);
     if (leviathan) {
-      console.log(`${leviathan.name} using ability: ${abilityId}`);
-      // Ability resolution in game loop
+      if (leviathan.isSpectator) {
+        this.state.addKaijuAbilityResult(
+          leviathan.id,
+          abilityId,
+          "REJECTED",
+          `ABILITY REJECTED - ${leviathan.name} IN SPECTATOR MODE`,
+          Date.now()
+        );
+        this.broadcastKaijuAbilityResults();
+        return;
+      }
+
+      const now = Date.now();
+      if (leviathan.status === "CONTAINED") {
+        this.state.addKaijuAbilityResult(
+          leviathan.id,
+          abilityId,
+          "REJECTED",
+          `ABILITY REJECTED - ${leviathan.name} CONTAINED`,
+          now
+        );
+        this.emitSignal(
+          `ABILITY REJECTED - ${leviathan.name} CONTAINED`,
+          "alert",
+          "SYSTEM"
+        );
+        this.broadcastKaijuAbilityResults();
+        return;
+      }
+
+      if (now < leviathan.abilityCooldownEndsAt) {
+        this.state.addKaijuAbilityResult(
+          leviathan.id,
+          abilityId,
+          "REJECTED",
+          `ABILITY REJECTED - ${Math.ceil((leviathan.abilityCooldownEndsAt - now) / 1000)}s COOLDOWN`,
+          now
+        );
+        this.broadcastKaijuAbilityResults();
+        return;
+      }
+
+      leviathan.pendingAbilityId = abilityId;
+      leviathan.pendingAbilityRequestedAt = now;
+      this.emitSignal(
+        `ABILITY QUEUED - ${leviathan.name} ${abilityId.toUpperCase()}`,
+        "nominal",
+        "SYSTEM"
+      );
     }
   }
 
   private handleKaijuContinue(leviathanId: string) {
     const leviathan = this.state.getLeviathan(leviathanId);
-    if (leviathan && leviathan.credits > 0) {
+    if (leviathan && !leviathan.isSpectator && leviathan.credits > 0 && leviathan.status === "CONTAINED") {
+      const now = Date.now();
+      const remainingWindowMs = GAME_CONSTANTS.CONTINUE_WINDOW_MS - (now - leviathan.containedAt);
+      if (remainingWindowMs <= 0) {
+        this.emitSignal(
+          `KAIJU ${leviathan.name} CONTINUE FAILED - WINDOW EXPIRED`,
+          "critical",
+          "SYSTEM"
+        );
+        return;
+      }
+
       leviathan.credits--;
       leviathan.hp = Math.ceil(leviathan.hpMax * GAME_CONSTANTS.RESPAWN_HP_FRACTION);
       leviathan.status = "ACTIVE";
+      leviathan.statusEndTime = 0;
+      leviathan.containedAt = 0;
+      leviathan.isSpectator = false;
       console.log(`${leviathan.name} continued with ${leviathan.credits} credits remaining`);
       this.emitSignal(
         `KAIJU ${leviathan.name} RESPAWNING - CREDIT USED`,
@@ -640,7 +701,11 @@ export class MatchRoom extends Room<MatchSchema> {
       now,
     });
 
+    this.transitionExpiredContinuedKaijuToSpectators(now);
+    this.broadcastContainedEvents(now);
+
     this.broadcastDispatchResults();
+    this.broadcastKaijuAbilityResults();
 
     // Signals generated by tick execution are mirrored over room broadcasts for commander UI.
     this.broadcastSignalsSince(signalCountBeforeTick);
@@ -763,6 +828,97 @@ export class MatchRoom extends Room<MatchSchema> {
       });
 
       dispatch.applied = true;
+    }
+  }
+
+  private broadcastKaijuAbilityResults() {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    for (const result of this.state.kaijuAbilityResults) {
+      if (result.applied) {
+        continue;
+      }
+
+      this.broadcast("kaiju.ability.result", {
+        type: "kaiju.ability.result",
+        resultId: result.id,
+        leviathanId: result.leviathanId,
+        abilityId: result.abilityId,
+        outcome: result.outcome,
+        message: result.message,
+        resolvedAt: result.resolvedAt,
+      });
+
+      result.applied = true;
+    }
+  }
+
+  private broadcastContainedEvents(now: number) {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    for (const leviathan of this.state.leviathans) {
+      if (leviathan.status !== "CONTAINED" || leviathan.containedAt <= 0) {
+        this.containedEventLedger.delete(leviathan.id);
+        continue;
+      }
+
+      const lastBroadcastContainedAt = this.containedEventLedger.get(leviathan.id) ?? 0;
+      if (leviathan.containedAt <= lastBroadcastContainedAt) {
+        continue;
+      }
+
+      this.broadcast("kaiju.contained", {
+        type: "kaiju.contained",
+        leviathanId: leviathan.id,
+        leviathanName: leviathan.name,
+        creditsRemaining: leviathan.credits,
+        containedAt: leviathan.containedAt,
+        timestamp: now,
+      });
+
+      this.containedEventLedger.set(leviathan.id, leviathan.containedAt);
+    }
+  }
+
+  private transitionExpiredContinuedKaijuToSpectators(now: number) {
+    for (const leviathan of this.state.leviathans) {
+      const continueWindowExpired =
+        leviathan.containedAt > 0 &&
+        now - leviathan.containedAt >= GAME_CONSTANTS.CONTINUE_WINDOW_MS;
+      const exhaustedCredits = leviathan.credits <= 0;
+      const shouldBecomeSpectator =
+        leviathan.status === "CONTAINED" &&
+        !leviathan.isSpectator &&
+        exhaustedCredits &&
+        continueWindowExpired;
+
+      if (!shouldBecomeSpectator) {
+        continue;
+      }
+
+      leviathan.isSpectator = true;
+      leviathan.pendingAbilityId = "";
+      leviathan.pendingAbilityRequestedAt = 0;
+
+      this.emitSignal(
+        `KAIJU ${leviathan.name} GAME OVER - ENTERING SPECTATOR MODE`,
+        "critical",
+        "SYSTEM"
+      );
+
+      if (typeof this.broadcast === "function") {
+        this.broadcast("kaiju.spectator", {
+          type: "kaiju.spectator",
+          leviathanId: leviathan.id,
+          leviathanName: leviathan.name,
+          reason: "continue-window-expired",
+          timestamp: now,
+        });
+      }
     }
   }
 

@@ -1,8 +1,11 @@
 import request from "supertest";
+import fs from "fs";
+import path from "path";
 
 const mockDefine = jest.fn();
 const mockCreate = jest.fn();
 const mockQuery = jest.fn();
+const mockJoinById = jest.fn();
 
 jest.mock("@colyseus/ws-transport", () => ({
   WebSocketTransport: jest.fn().mockImplementation(() => ({})),
@@ -21,6 +24,7 @@ jest.mock("colyseus", () => ({
   matchMaker: {
     create: mockCreate,
     query: mockQuery,
+    joinById: mockJoinById,
   },
 }));
 
@@ -133,6 +137,51 @@ describe("API /api/matches", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("COMMANDER CONSOLE");
+    expect(response.text).toContain("id=\"alertModeToggle\"");
+    expect(response.text).toContain("id=\"matchElapsed\"");
+    expect(response.text).toContain("id=\"etaToBase\"");
+    expect(response.text).toContain("id=\"timelineFeed\"");
+  });
+
+  it("serves the kaiju pilot HUD scaffold", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/kaiju/index.html");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("KAIJU PILOT HUD");
+    expect(response.text).toContain("class=\"panel context-switcher\"");
+    expect(response.text).toContain("id=\"modeBadge\"");
+    expect(response.text).toContain("id=\"primaryAlert\"");
+    expect(response.text).toContain("id=\"continueCredits\"");
+    expect(response.text).toContain("id=\"continueHint\"");
+  });
+
+  it("includes kaiju spectator map and cooldown fill scaffolding", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/kaiju/index.html");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("id=\"spectatorLeafletMap\"");
+    expect(response.text).toContain("id=\"spectatorRadarOverlay\"");
+    expect(response.text).toContain("id=\"attackCooldownFill\"");
+    expect(response.text).toContain("id=\"abilityCooldownFill\"");
+  });
+
+  it("wires continue FX and spectator map handlers in kaiju client script", () => {
+    const appJsPath = path.resolve(__dirname, "../public/kaiju/app.js");
+    const appSource = fs.readFileSync(appJsPath, "utf8");
+
+    expect(appSource).toContain("function playContainmentFx()");
+    expect(appSource).toContain("function playCoinDropCue()");
+    expect(appSource).toContain("function initializeSpectatorMap()");
+    expect(appSource).toContain("function drawSpectatorMap()");
+    expect(appSource).toContain("room.onMessage(\"kaiju.contained\"");
+    expect(appSource).toContain("attackCooldownFillEl.style.width");
+    expect(appSource).toContain("abilityCooldownFillEl.style.width");
+    expect(appSource).toContain("function setContextPanel(panelName)");
+    expect(appSource).toContain("function setPrimaryAlert(text, className)");
   });
 
   it("returns 400 when create fails", async () => {
@@ -177,6 +226,43 @@ describe("API /api/matches", () => {
       private: false,
       locked: false,
     });
+  });
+
+  it("reserves a kaiju seat via join helper endpoint", async () => {
+    mockJoinById.mockResolvedValue({
+      sessionId: "sess-k-1",
+      roomId: "room-1",
+      processId: "proc-1",
+      publicAddress: "localhost:3000",
+    });
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches/room-1/kaiju-join")
+      .send({ playerName: "Kaiju Pilot", reconnectToken: "reco-1" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.roomName).toBe("match");
+    expect(response.body.sessionId).toBe("sess-k-1");
+    expect(response.body.roomId).toBe("room-1");
+    expect(mockJoinById).toHaveBeenCalledWith("room-1", {
+      playerName: "Kaiju Pilot",
+      reconnectToken: "reco-1",
+    });
+  });
+
+  it("returns 400 when kaiju seat reservation fails", async () => {
+    mockJoinById.mockRejectedValue(new Error("join failed"));
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches/room-1/kaiju-join")
+      .send({ playerName: "Kaiju Pilot" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("join failed");
   });
 
   it("returns 500 when listing fails", async () => {

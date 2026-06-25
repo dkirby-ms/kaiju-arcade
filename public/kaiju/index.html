@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaiju Arcade Pilot HUD</title>
+    <link rel="stylesheet" href="/kaiju/styles.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/colyseus.js@0.16.20/dist/colyseus.js"></script>
+  </head>
+  <body>
+    <main class="hud-shell">
+      <header class="hud-header panel">
+        <h1>KAIJU PILOT HUD</h1>
+        <p class="subline">MOBILE COMMAND SURFACE</p>
+      </header>
+
+      <section class="panel context-switcher" aria-label="View selector">
+        <button class="context-button active" type="button" data-target="session">Session</button>
+        <button class="context-button" type="button" data-target="map">Map</button>
+        <button class="context-button" type="button" data-target="feed">Feed</button>
+      </section>
+
+      <section id="sessionPanel" class="panel session-panel context-panel">
+        <h2>SESSION</h2>
+        <label for="pilotName">Pilot</label>
+        <input id="pilotName" type="text" maxlength="24" value="Kaiju Pilot" />
+
+        <label for="roomId">Room</label>
+        <select id="roomId"></select>
+
+        <label for="reconnectToken">Reconnect Token</label>
+        <input id="reconnectToken" type="text" placeholder="Optional token" />
+
+        <div class="session-actions">
+          <button id="refreshMatchesButton" class="secondary">Refresh Matches</button>
+          <button id="joinButton" class="primary">Join Match</button>
+        </div>
+
+        <p id="connectionState" class="status">OFFLINE</p>
+      </section>
+
+      <section id="mapPanel" class="panel map-panel context-panel hidden">
+        <h2>TACTICAL MAP</h2>
+        <div class="spectator-map-shell">
+          <div id="spectatorLeafletMap"></div>
+          <canvas id="spectatorRadarOverlay"></canvas>
+        </div>
+      </section>
+
+      <section class="panel stats-panel">
+        <h2>KAIJU STATUS</h2>
+        <div class="mode-row" role="status" aria-live="polite">
+          <span>MODE</span>
+          <strong id="modeBadge" class="mode-badge critical">OFFLINE</strong>
+          <span id="modeHint" class="mode-hint">Join a match to arm controls.</span>
+        </div>
+        <p id="primaryAlert" class="primary-alert nominal">Awaiting tactical telemetry.</p>
+        <div class="stats-grid">
+          <div>
+            <span>Name</span>
+            <strong id="kaijuName">-</strong>
+          </div>
+          <div>
+            <span>Archetype</span>
+            <strong id="kaijuArchetype">-</strong>
+          </div>
+          <div>
+            <span>State</span>
+            <strong id="kaijuStatus">-</strong>
+          </div>
+          <div>
+            <span>Credits</span>
+            <strong id="kaijuCredits">-</strong>
+          </div>
+        </div>
+
+        <div class="hp-wrap">
+          <div class="hp-label-row">
+            <span>HP</span>
+            <strong id="hpText">0 / 0</strong>
+          </div>
+          <div id="hpBar" class="hp-segments" aria-label="Kaiju HP bar"></div>
+        </div>
+
+        <div class="distance-wrap">
+          <div class="hp-label-row">
+            <span>DISTANCE TO BASE</span>
+            <strong id="distanceText">-</strong>
+          </div>
+          <div class="distance-track">
+            <div id="distanceFill" class="distance-fill"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel action-panel">
+        <h2>ABILITIES</h2>
+        <div class="ability-grid">
+          <button id="moveLeftButton" class="ability move">Turn Left</button>
+          <button id="moveRightButton" class="ability move">Turn Right</button>
+          <button id="attackButton" class="ability attack">Attack</button>
+          <button id="abilityButton" class="ability special">Ability</button>
+        </div>
+        <div class="cooldown-meters">
+          <div class="cooldown-meter">
+            <div class="meter-label-row">
+              <span>Attack Cooldown</span>
+              <strong id="attackCooldownText">READY</strong>
+            </div>
+            <div class="meter-track">
+              <div id="attackCooldownFill" class="meter-fill"></div>
+            </div>
+          </div>
+          <div class="cooldown-meter">
+            <div class="meter-label-row">
+              <span>Ability Cooldown</span>
+              <strong id="abilityCooldownText">READY</strong>
+            </div>
+            <div class="meter-track">
+              <div id="abilityCooldownFill" class="meter-fill"></div>
+            </div>
+          </div>
+        </div>
+        <details class="cooldown-details">
+          <summary>Cooldown Diagnostics</summary>
+          <ul id="cooldowns"></ul>
+        </details>
+      </section>
+
+      <section id="spectatorPanel" class="panel spectator-panel hidden">
+        <h2>SPECTATOR COMMAND VIEW</h2>
+        <p class="spectator-subline">INPUT LOCKED - WATCHING COMMANDER TELEMETRY</p>
+        <div class="stats-grid">
+          <div>
+            <span>City Base HP</span>
+            <strong id="spectatorCityBaseHp">-</strong>
+          </div>
+          <div>
+            <span>Commander Score</span>
+            <strong id="spectatorCommanderScore">-</strong>
+          </div>
+          <div>
+            <span>Active Barriers</span>
+            <strong id="spectatorBarriers">-</strong>
+          </div>
+          <div>
+            <span>Selected Threat</span>
+            <strong id="spectatorTarget">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section id="feedPanel" class="panel feed-panel context-panel hidden">
+        <h2>PILOT FEED</h2>
+        <ul id="signalFeed"></ul>
+      </section>
+
+      <section id="continueOverlay" class="continue-overlay hidden" aria-live="polite">
+        <p class="contained-text">CONTAINED</p>
+        <p class="insert-coin">INSERT COIN</p>
+        <p id="continueState" class="continue-state">AUTO-SPECTATOR IN <span id="continueCountdown">10.0</span>s</p>
+        <p id="continueCredits" class="continue-credits">CREDITS: 0</p>
+        <p id="continueHint" class="continue-hint">Press continue to respawn at 60% HP.</p>
+        <button id="continueButton" class="continue-button">Continue</button>
+      </section>
+
+      <div id="damageLayer" class="damage-layer" aria-hidden="true"></div>
+    </main>
+
+    <script src="/kaiju/app.js"></script>
+    <audio id="coinDropAudio" preload="auto"></audio>
+  </body>
+</html>
