@@ -1,0 +1,14 @@
+# TruffleHog configuration
+# This file excludes paths and patterns that should not be scanned for secrets
+
+exclude:
+  paths:
+    - path: package-lock.json
+      description: "Exclude package-lock.json - generated dependency lock file that can contain patterns resembling secrets"
+    - path: node_modules
+      description: "Exclude node_modules directory"
+  
+  # Exclude patterns that commonly appear in generated files but aren't real secrets
+  patterns:
+    - pattern: "(test|mock|example|dummy|fake).*key"
+      description: "Exclude test/mock credentials"
