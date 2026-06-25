@@ -9,6 +9,7 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { Server as ColyseusServer } from "colyseus";
+import { LobbyRoom } from "colyseus";
 import { matchMaker } from "colyseus";
 import { createNodeMatchmakingMiddleware } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
@@ -102,6 +103,7 @@ app.get("/api/matches/options", (_req, res) => {
 
 // Register match room with realtime listing so LobbyRoom clients can discover updates.
 gameServer.define("match", MatchRoom).enableRealtimeListing();
+gameServer.define("lobby", LobbyRoom);
 
 // REST API: Create new match
 app.post("/api/matches", createMatchRateLimiter, async (req, res) => {
@@ -278,7 +280,16 @@ app.get("/api/matches/:roomId", async (req, res) => {
       return;
     }
 
-    const rooms = await matchMaker.query({ roomId });
+    let rooms: unknown[] = [];
+    try {
+      rooms = await matchMaker.query({ roomId });
+    } catch (queryError) {
+      logger.warn(`Query failed for roomId ${roomId}`, {
+        error: queryError instanceof Error ? queryError.message : String(queryError),
+      });
+      // Continue to 404 if query fails
+    }
+
     if (rooms.length === 0) {
       res.status(404).json({ error: "Room not found" });
       span.end();
@@ -286,16 +297,20 @@ app.get("/api/matches/:roomId", async (req, res) => {
     }
 
     const room = rooms[0] as unknown as MatchRoom;
+    const roomState = (room as any).state?.toJSON?.() || {};
     res.json({
       room: {
-        roomId: room.roomId,
-        state: (room.state as any).toJSON?.() || {},
+        roomId: (room as any).roomId,
+        state: roomState,
       },
     });
     span.end();
   } catch (error) {
     span.end(error as Error);
-    res.status(400).json({ error: (error as Error).message });
+    logger.error("GET /api/matches/:roomId error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({ error: "Internal server error: " + (error as Error).message });
   }
 });
 

@@ -23,6 +23,7 @@ jest.mock("colyseus", () => ({
       // no-op for unit tests
     }
   },
+  LobbyRoom: class {},
   Client: class {},
   matchMaker: {
     create: mockCreate,
@@ -39,10 +40,11 @@ describe("API /api/matches", () => {
     });
   });
 
-  it("registers match room with realtime listing enabled", async () => {
+  it("registers match and lobby rooms with realtime listing enabled for match", async () => {
     await import("./index");
 
     expect(mockDefine).toHaveBeenCalledWith("match", expect.any(Function));
+    expect(mockDefine).toHaveBeenCalledWith("lobby", expect.any(Function));
     expect(mockEnableRealtimeListing).toHaveBeenCalledTimes(1);
   });
 
@@ -252,6 +254,20 @@ describe("API /api/matches", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("global.KaijuColyseusClient");
+    expect(response.text).toContain("client.joinOrCreate(\"lobby\"");
+    expect(response.text).toContain("client.joinById(roomId, joinOptions)");
+    expect(response.text).not.toContain("client.joinById(roomId, {})");
+  });
+
+  it("serves shared room app without deprecated reconnect token listeners", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/common/match-room-app.js");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("consumeSeatReservation(client, reservation, joinOptions)");
+    expect(response.text).not.toContain("match.reconnect.token");
+    expect(response.text).not.toContain("kaiju.reconnect.token");
   });
 
   it("serves lobby slot controls helper", async () => {

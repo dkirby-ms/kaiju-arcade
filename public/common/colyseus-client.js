@@ -1,6 +1,7 @@
 (function attachColyseusClient(global) {
   const RECONNECT_ROOM_NAME = "match";
   const REST_LOBBY_POLL_MS = 2000;
+  const METRIC_EVENT_NAME = "kaiju.colyseus.client.metric";
 
   function initializeColyseusClient() {
     function getColyseusNamespace() {
@@ -34,12 +35,14 @@
             let disposed = false;
             let pollTimer = null;
             const listeners = new Map();
+            const roomId = reservation?.roomId || reservation?.room?.roomId;
+            const sessionId = reservation?.sessionId || reservation?.room?.sessionId || "";
             
             const mockRoom = {
-              sessionId: reservation.sessionId,
-              roomId: reservation.room.roomId,
-              id: reservation.room.roomId,
-              reconnectionToken: reservation.sessionId,
+              sessionId,
+              roomId,
+              id: roomId,
+              reconnectionToken: sessionId,
               state: {
                 commander: null,
                 leviathans: [],
@@ -112,7 +115,21 @@
 
     function shouldUseRestFallback(error) {
       const message = normalizeErrorMessage(error).toLowerCase();
-      return message.includes("/matchmake/") || message.includes("404") || message.includes("not found");
+      return message.includes("/matchmake/") || message.includes("404") || message.includes("not found") || message.includes("failed to fetch");
+    }
+
+    function emitClientMetric(type, labels) {
+      try {
+        global.dispatchEvent(new CustomEvent(METRIC_EVENT_NAME, {
+          detail: {
+            type,
+            labels: labels || {},
+            timestamp: Date.now(),
+          },
+        }));
+      } catch {
+        // Browser compatibility and telemetry safety: metric events must never break gameplay.
+      }
     }
 
     async function postJson(path, payload) {
@@ -132,24 +149,47 @@
       return response.json();
     }
 
-    function toSeatReservation(reservation) {
-      if (!reservation || !reservation.sessionId || !reservation.roomId) {
+    function normalizeSeatReservation(reservation) {
+      if (!reservation || !reservation.sessionId || !(reservation.roomId || reservation.room?.roomId)) {
         throw new Error("Invalid seat reservation response from server.");
+      }
+
+      if (reservation.roomId) {
+        return reservation;
       }
 
       return {
         sessionId: reservation.sessionId,
-        room: {
-          name: reservation.roomName || RECONNECT_ROOM_NAME,
-          roomId: reservation.roomId,
-          processId: reservation.processId,
-          publicAddress: reservation.publicAddress,
-        },
+        roomId: reservation.room?.roomId,
+        roomName: reservation.room?.name || RECONNECT_ROOM_NAME,
+        processId: reservation.room?.processId,
+        publicAddress: reservation.room?.publicAddress,
       };
     }
 
-    async function consumeSeatReservation(client, reservation) {
-      return client.consumeSeatReservation(toSeatReservation(reservation));
+    async function consumeSeatReservation(client, reservation, options) {
+      const normalizedReservation = normalizeSeatReservation(reservation);
+      const joinOptions = options || {};
+
+      try {
+        emitClientMetric("seat.consume.attempt", { path: "native" });
+        return await client.consumeSeatReservation(normalizedReservation);
+      } catch (error) {
+        // If consumption fails, it means either:
+        // 1. The reservation expired, or
+        // 2. We're using a real WebSocket client but reservation was created via REST
+        // In both cases, try using native joinById instead
+        console.warn("Seat reservation consumption failed, attempting native join:", error?.message);
+        
+        const roomId = normalizedReservation.roomId;
+        if (roomId && typeof client.joinById === "function") {
+          console.log("Using native client.joinById instead of seat reservation consumption");
+          emitClientMetric("seat.consume.fallback", { reason: "consume_failed" });
+          return await client.joinById(roomId, joinOptions);
+        }
+        
+        throw error;
+      }
     }
 
     async function createMatchReservationViaRest(options) {
@@ -262,8 +302,19 @@
     }
 
     async function joinLobby(client, options) {
-      // The current server setup exposes /api/matches for lobby discovery.
-      // Avoid calling /matchmake/joinOrCreate/lobby first to prevent noisy 404s in browser consoles.
+      if (typeof client.joinOrCreate === "function") {
+        try {
+          const lobbyRoom = await client.joinOrCreate("lobby", options || {});
+          emitClientMetric("lobby.join.path", { path: "native" });
+          return lobbyRoom;
+        } catch (error) {
+          if (!shouldUseRestFallback(error)) {
+            throw error;
+          }
+        }
+      }
+
+      emitClientMetric("lobby.join.path", { path: "rest" });
       return createRestLobbyRoom();
     }
 
@@ -372,7 +423,6 @@
       joinLobby,
       createMatch,
       joinMatchById,
-      consumeSeatReservation,
       bindLobbyRoomListHandlers,
     };
   }

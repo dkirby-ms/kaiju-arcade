@@ -314,41 +314,8 @@
     </main>
 
     <script src="/common/session-manager.js"></script>
-    <!-- Load Colyseus from privacy-friendly CDN with fallbacks -->
-    <script>
-      // Attempt to load Colyseus from multiple sources to avoid Tracking Prevention blocks
-      (function() {
-        const sources = [
-          'https://cdn.jsdelivr.net/npm/colyseus@0.17.10/build/vite.cjs',
-          'https://cdn.skypack.dev/colyseus@0.17.10',
-          'https://esm.sh/colyseus@0.17.10',
-        ];
-        
-        let currentIndex = 0;
-        
-        function loadNext() {
-          if (currentIndex >= sources.length) {
-            console.warn('All Colyseus CDN sources failed, will attempt WebSocket via REST API');
-            window.Colyseus = window.colyseus = null; // Explicitly set to null
-            return;
-          }
-          
-          const script = document.createElement('script');
-          script.src = sources[currentIndex];
-          script.onload = function() {
-            console.log('Colyseus loaded from:', sources[currentIndex]);
-          };
-          script.onerror = function() {
-            console.warn('Failed to load from:', sources[currentIndex], ', trying next...');
-            currentIndex++;
-            loadNext();
-          };
-          document.head.appendChild(script);
-        }
-        
-        loadNext();
-      })();
-    </script>
+    <!-- Load Colyseus from local vendor bundle -->
+    <script src="/vendor/colyseus-sdk-0.17.js"></script>
     <script src="/common/colyseus-client.js"></script>
     <script src="/common/match-room-app.js"></script>
   </body>

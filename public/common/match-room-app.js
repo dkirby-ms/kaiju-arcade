@@ -269,31 +269,6 @@
       handleActivation();
     });
 
-    room.onMessage("match.reconnect.token", (payload) => {
-      console.log(`[TOKEN] match-room-app received match.reconnect.token:`, payload);
-      if (payload?.reconnectToken) {
-        session.setReconnectionToken(payload.reconnectToken);
-        // Also store to localStorage for cross-page navigation persistence
-        localStorage.setItem("kaijuReconnectToken", payload.reconnectToken);
-        console.log(`[TOKEN] match-room-app stored match.reconnect.token to localStorage: ${payload.reconnectToken.slice(0, 8)}...`);
-      } else {
-        console.log(`[TOKEN] match-room-app match.reconnect.token has no reconnectToken field!`);
-      }
-    });
-
-    room.onMessage("kaiju.reconnect.token", (payload) => {
-      console.log(`[TOKEN] match-room-app received kaiju.reconnect.token:`, payload);
-      if (payload?.reconnectToken) {
-        session.setReconnectionToken(payload.reconnectToken);
-        // Also store to localStorage so it persists when navigating to /kaiju/index.html
-        // (sessionStorage is cleared on page navigation)
-        localStorage.setItem("kaijuReconnectToken", payload.reconnectToken);
-        console.log(`[TOKEN] match-room-app stored kaiju.reconnect.token to localStorage: ${payload.reconnectToken.slice(0, 8)}...`);
-      } else {
-        console.log(`[TOKEN] match-room-app kaiju.reconnect.token has no reconnectToken field!`);
-      }
-    });
-
     room.onLeave(() => {
       if (!state.pendingRedirect) {
         setConnection("OFFLINE");
@@ -318,18 +293,61 @@
   }
 
   async function connectToRoom() {
-    const reservation = session.getPendingSeatReservation() || (await reserveFromRoomContext());
-    if (!reservation) {
-      throw new Error("Missing seat reservation.");
+    // Always get a fresh room connection, avoiding stale reservations
+    let roomId = null;
+    
+    // Try to get roomId from roomContext first, then fallback to state.roomId
+    const roomContext = session.getCurrentRoomContext();
+    if (roomContext?.roomId) {
+      roomId = roomContext.roomId;
+      console.log("[connectToRoom] Using roomId from roomContext:", roomId);
+    } else if (state.roomId) {
+      roomId = state.roomId;
+      console.log("[connectToRoom] Falling back to roomId from state:", roomId);
+    }
+    
+    if (!roomId) {
+      console.error("[connectToRoom] No roomId available:", { roomContext, stateRoomId: state.roomId });
+      throw new Error("No room ID available. Please return to the lobby and select a match.");
     }
 
-    elements.reservationState.textContent = "Reserved";
-    setConnection("CONNECTING");
-    setStatus("Attaching to match room...");
+    console.log("[connectToRoom] Connecting to roomId:", roomId);
+    
+    try {
+      const client = clientApi.createClient();
+      console.log("[connectToRoom] Client created");
 
-    const client = clientApi.createClient();
-    const room = await clientApi.consumeSeatReservation(client, reservation);
-    bindRoom(room);
+      const joinOptions = {
+        playerName: state.playerName,
+        reconnectToken: session.getReconnectionToken(),
+      };
+
+      const pendingReservation = session.getPendingSeatReservation();
+      const canReusePendingReservation =
+        pendingReservation &&
+        (pendingReservation.roomId || pendingReservation.room?.roomId) === roomId;
+
+      const reservation = canReusePendingReservation
+        ? pendingReservation
+        : await clientApi.joinMatchReservationViaRest(roomId, joinOptions);
+
+      const room = await clientApi.consumeSeatReservation(client, reservation, joinOptions);
+      
+      console.log("[connectToRoom] Room connected:", room.roomId);
+      
+      session.setPendingSeatReservation({
+        sessionId: room.sessionId,
+        roomId: room.roomId,
+      });
+      elements.reservationState.textContent = "Reserved";
+      
+      setConnection("CONNECTING");
+      setStatus("Attaching to match room...");
+      bindRoom(room);
+    } catch (error) {
+      console.error("[connectToRoom] Error during connection:", error);
+      throw new Error(`Failed to connect to match room: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function performRoomAction(action) {
@@ -414,17 +432,27 @@
     state.playerName = entrySession.playerName || activeSession?.playerName || "";
     state.roomId = session.getCurrentMatchId() || activeSession?.roomId || "";
 
+    console.log("[initialize] State:", { playerName: state.playerName, roomId: state.roomId });
+    console.log("[initialize] Session context:", { 
+      roomContext: session.getCurrentRoomContext(),
+      pendingReservation: Boolean(session.getPendingSeatReservation()),
+    });
+
     elements.playerName.textContent = state.playerName || "-";
     elements.roomId.textContent = state.roomId || "-";
     elements.reservationState.textContent = session.getPendingSeatReservation() ? "Reserved" : "Missing";
 
     if (!state.playerName) {
+      setError("Missing player name. Return to lobby.");
       global.location.assign("/index.html");
       return;
     }
 
-    if (!state.roomId && !session.getPendingSeatReservation()) {
-      setError("Missing room context. Return to lobby and re-enter a match.");
+    const roomContext = session.getCurrentRoomContext();
+    if (!roomContext?.roomId && !state.roomId) {
+      const msg = "Missing room context. Return to lobby and re-enter a match.";
+      setError(msg);
+      appendFeed(msg, "critical");
       return;
     }
 
@@ -432,14 +460,20 @@
     syncDerivedState();
 
     try {
+      console.log("[initialize] Starting connectToRoom...");
       await connectToRoom();
+      console.log("[initialize] connectToRoom completed successfully");
+      
       if (state.phase === "ACTIVE") {
         redirectToActiveClient();
       }
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Failed to connect to match room.";
+      console.error("[initialize] connectToRoom failed:", error);
+      
       setConnection("OFFLINE");
-      setError(error instanceof Error ? error.message : "Failed to connect to match room.");
-      appendFeed("Stale reservation or room context detected.", "critical");
+      setError(errorMsg);
+      appendFeed(`Connection failed: ${errorMsg}`, "critical");
     }
   }
 
