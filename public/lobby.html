@@ -186,6 +186,7 @@
           lobbyRoom: null,
           rooms: [],
           isBusy: false,
+          isLobbyConnected: false,
         };
 
         const playerNameEl = document.getElementById("playerName");
@@ -223,7 +224,14 @@
 
         function setBusy(value) {
           state.isBusy = Boolean(value);
-          createMatchButtonEl.disabled = state.isBusy;
+          const disableActions = state.isBusy || !state.isLobbyConnected;
+          createMatchButtonEl.disabled = disableActions;
+          refreshButtonEl.disabled = disableActions;
+        }
+
+        function setLobbyConnected(value) {
+          state.isLobbyConnected = Boolean(value);
+          setBusy(state.isBusy);
         }
 
         function storePendingReservation(reservation) {
@@ -405,6 +413,7 @@
           }
 
           setError("");
+          setLobbyConnected(false);
           setStatus("Connecting to lobby...");
 
           try {
@@ -420,8 +429,10 @@
               onSnapshot: (rooms) => normalizeRoomList(rooms),
             });
 
+            setLobbyConnected(true);
             setStatus("Lobby connected.");
           } catch (error) {
+            setLobbyConnected(false);
             setError(error instanceof Error ? error.message : "Unable to connect to lobby.");
             setStatus("Lobby unavailable.");
           }
@@ -434,6 +445,8 @@
         changeIdentityButtonEl.addEventListener("click", () => {
           window.location.assign("/index.html");
         });
+
+        setBusy(false);
 
         // Wait for Colyseus client API to be ready (with fallback to REST-only)
         function ensureColyseusClientReady(callback, maxAttempts = 20) {

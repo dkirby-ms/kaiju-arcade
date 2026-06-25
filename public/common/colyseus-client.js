@@ -1,6 +1,7 @@
 (function attachColyseusClient(global) {
   const RECONNECT_ROOM_NAME = "match";
   const REST_LOBBY_POLL_MS = 2000;
+  const LOBBY_NATIVE_JOIN_TIMEOUT_MS = 3500;
   const METRIC_EVENT_NAME = "kaiju.colyseus.client.metric";
 
   function initializeColyseusClient() {
@@ -130,6 +131,24 @@
       } catch {
         // Browser compatibility and telemetry safety: metric events must never break gameplay.
       }
+    }
+
+    function withTimeout(promise, timeoutMs, message) {
+      return new Promise((resolve, reject) => {
+        const timeoutHandle = global.setTimeout(() => {
+          reject(new Error(message || "Operation timed out."));
+        }, timeoutMs);
+
+        Promise.resolve(promise)
+          .then((value) => {
+            global.clearTimeout(timeoutHandle);
+            resolve(value);
+          })
+          .catch((error) => {
+            global.clearTimeout(timeoutHandle);
+            reject(error);
+          });
+      });
     }
 
     async function postJson(path, payload) {
@@ -304,12 +323,19 @@
     async function joinLobby(client, options) {
       if (typeof client.joinOrCreate === "function") {
         try {
-          const lobbyRoom = await client.joinOrCreate("lobby", options || {});
+          const lobbyRoom = await withTimeout(
+            client.joinOrCreate("lobby", options || {}),
+            LOBBY_NATIVE_JOIN_TIMEOUT_MS,
+            "Native lobby join timed out."
+          );
           emitClientMetric("lobby.join.path", { path: "native" });
           return lobbyRoom;
         } catch (error) {
           if (!shouldUseRestFallback(error)) {
-            throw error;
+            const normalizedMessage = normalizeErrorMessage(error).toLowerCase();
+            if (!normalizedMessage.includes("timed out")) {
+              throw error;
+            }
           }
         }
       }
