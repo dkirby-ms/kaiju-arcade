@@ -41,7 +41,7 @@
 
   const leafletMap = window.L.map("leafletMap", {
     center: [47.6062, -122.3321],
-    zoom: 11,
+    zoom: 12,
     zoomControl: false,
     attributionControl: true,
     dragging: false,
@@ -57,12 +57,6 @@
     subdomains: "abcd",
     maxZoom: 19,
   }).addTo(leafletMap);
-
-  // Fit the map to the game coordinate bounding box
-  leafletMap.fitBounds([
-    [MAP_BOUNDS.south, MAP_BOUNDS.west],
-    [MAP_BOUNDS.north, MAP_BOUNDS.east],
-  ]);
 
   const radarCanvasEl = document.getElementById("radarOverlay");
   const radarCtx = radarCanvasEl.getContext("2d");
@@ -295,6 +289,8 @@
     setTimeout(() => {
       sizeCanvas();
       leafletMap.invalidateSize();
+      // Center the map on the city base after container is properly sized
+      leafletMap.setView([47.6062, -122.3321], 12);
     }, 100);
     requestAnimationFrame(drawCommandMap);
   }
@@ -621,6 +617,8 @@
       renderLobbyRoster();
       updatePhaseUi();
       reconcileAlertMode();
+      // Ensure map is centered on city base when state updates
+      leafletMap.setView([47.6062, -122.3321], 12);
     });
 
     room.onMessage("match.phase", (payload) => {

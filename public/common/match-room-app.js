@@ -270,14 +270,27 @@
     });
 
     room.onMessage("match.reconnect.token", (payload) => {
+      console.log(`[TOKEN] match-room-app received match.reconnect.token:`, payload);
       if (payload?.reconnectToken) {
         session.setReconnectionToken(payload.reconnectToken);
+        // Also store to localStorage for cross-page navigation persistence
+        localStorage.setItem("kaijuReconnectToken", payload.reconnectToken);
+        console.log(`[TOKEN] match-room-app stored match.reconnect.token to localStorage: ${payload.reconnectToken.slice(0, 8)}...`);
+      } else {
+        console.log(`[TOKEN] match-room-app match.reconnect.token has no reconnectToken field!`);
       }
     });
 
     room.onMessage("kaiju.reconnect.token", (payload) => {
+      console.log(`[TOKEN] match-room-app received kaiju.reconnect.token:`, payload);
       if (payload?.reconnectToken) {
         session.setReconnectionToken(payload.reconnectToken);
+        // Also store to localStorage so it persists when navigating to /kaiju/index.html
+        // (sessionStorage is cleared on page navigation)
+        localStorage.setItem("kaijuReconnectToken", payload.reconnectToken);
+        console.log(`[TOKEN] match-room-app stored kaiju.reconnect.token to localStorage: ${payload.reconnectToken.slice(0, 8)}...`);
+      } else {
+        console.log(`[TOKEN] match-room-app kaiju.reconnect.token has no reconnectToken field!`);
       }
     });
 

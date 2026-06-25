@@ -1211,8 +1211,12 @@
     const client = window.KaijuColyseusClient.createClient();
 
     const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
-    const reconnectToken =
-      (window.KaijuSession && window.KaijuSession.getReconnectionToken()) || readStoredReconnectToken();
+    
+    const sessionToken = window.KaijuSession && window.KaijuSession.getReconnectionToken() ? window.KaijuSession.getReconnectionToken() : "";
+    const localToken = readStoredReconnectToken();
+    const reconnectToken = sessionToken || localToken;
+
+    console.log(`[TOKEN] reconnectActiveMatch: selectedRoomId=${selectedRoomId}, sessionToken=${sessionToken ? sessionToken.slice(0, 8) : 'EMPTY'}, localToken=${localToken ? localToken.slice(0, 8) : 'EMPTY'}, final=${reconnectToken ? reconnectToken.slice(0, 8) : 'EMPTY'}`);
 
     if (!reconnectToken) {
       routeUpstream(false);
@@ -1645,10 +1649,14 @@
 
     const currentMatchId =
       (window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "") || activeMatchSession?.roomId || "";
-    const reconnectToken =
-      (window.KaijuSession ? window.KaijuSession.getReconnectionToken() : "") ||
-      activeMatchSession?.reconnectToken ||
-      readStoredReconnectToken();
+    
+    const sessionToken = window.KaijuSession ? window.KaijuSession.getReconnectionToken() : "";
+    const activeToken = activeMatchSession?.reconnectToken || "";
+    const localStorageToken = readStoredReconnectToken();
+    
+    console.log(`[TOKEN] kaiju/app.js init: sessionToken=${sessionToken ? sessionToken.slice(0, 8) : 'EMPTY'}, activeToken=${activeToken ? activeToken.slice(0, 8) : 'EMPTY'}, localStorage=${localStorageToken ? localStorageToken.slice(0, 8) : 'EMPTY'}`);
+    
+    const reconnectToken = sessionToken || activeToken || localStorageToken;
 
     if (currentMatchId) {
       roomIdEl.value = currentMatchId;

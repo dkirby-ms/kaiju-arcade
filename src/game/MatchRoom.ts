@@ -250,6 +250,7 @@ export class MatchRoom extends Room<MatchSchema> {
 
     const reconnectToken =
       typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
+    console.log(`[TOKEN] onJoin received reconnectToken=${reconnectToken ? reconnectToken.slice(0, 8) : 'UNDEFINED'}, full options:`, JSON.stringify(options));
     if (reconnectToken) {
       if (this.tryReclaimCommanderSession(client, session, reconnectToken)) {
         this.refreshLobbyMetadata();
@@ -531,11 +532,14 @@ export class MatchRoom extends Room<MatchSchema> {
       return false;
     }
 
+    console.log(`[TOKEN] handleRoleClaim: Kaiju slot claimed for ${session.playerName}, leviathanId=${leviathan.id}`);
     session.role = "KAIJU";
     session.ready = false;
     session.leviathanId = leviathan.id;
     this.syncParticipant(session);
+    console.log(`[TOKEN] handleRoleClaim: About to call sendReconnectToken for leviathanId=${leviathan.id}`);
     this.sendReconnectToken(client, leviathan.id);
+    console.log(`[TOKEN] handleRoleClaim: sendReconnectToken completed`);
     this.refreshLobbyMetadata();
     this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
     return true;
@@ -886,15 +890,24 @@ export class MatchRoom extends Room<MatchSchema> {
     playerName: string
   ): LeviathanSchema | undefined {
     if (!reconnectToken) {
+      console.log(`[TOKEN] reclaimKaijuGraceSlot: No reconnectToken provided`);
       return undefined;
     }
+
+    console.log(`[TOKEN] reclaimKaijuGraceSlot: Looking for token ${reconnectToken.slice(0, 8)}...`);
+    console.log(`[TOKEN] reclaimKaijuGraceSlot: Grace windows count: ${this.reconnectGraceWindows.size}`);
+    Array.from(this.reconnectGraceWindows.entries()).forEach(([id, window]) => {
+      console.log(`[TOKEN]   Window ${id}: token=${window.reconnectToken.slice(0, 8)}...`);
+    });
 
     const graceWindow = Array.from(this.reconnectGraceWindows.values()).find(
       (window: ReconnectGraceWindow) => window.reconnectToken === reconnectToken
     );
     if (!graceWindow) {
+      console.log(`[TOKEN] reclaimKaijuGraceSlot: NO MATCHING GRACE WINDOW FOUND`);
       return undefined;
     }
+    console.log(`[TOKEN] reclaimKaijuGraceSlot: FOUND matching grace window for leviathan ${graceWindow.leviathanId}`);
 
     const leviathan = this.state.getLeviathan(graceWindow.leviathanId);
     if (!leviathan) {
@@ -931,7 +944,9 @@ export class MatchRoom extends Room<MatchSchema> {
     // client navigates to /kaiju/index.html carrying the original token and has no way
     // to receive the newly-issued one before the WebSocket closes.
     const existingToken = this.reconnectTokenByLeviathanId.get(leviathan.id);
+    console.log(`[TOKEN] startReconnectGraceWindow for ${leviathan.id}: existingToken=${existingToken ? existingToken.slice(0, 8) + '...' : 'NOT FOUND'}`);
     const reconnectToken = existingToken ?? this.issueReconnectToken(leviathan.id);
+    console.log(`[TOKEN] Grace window will use token: ${reconnectToken.slice(0, 8)}...`);
 
     console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
     this.emitSignal(
@@ -1098,6 +1113,7 @@ export class MatchRoom extends Room<MatchSchema> {
   private issueReconnectToken(leviathanId: string): string {
     const reconnectToken = uuid();
     this.reconnectTokenByLeviathanId.set(leviathanId, reconnectToken);
+    console.log(`[TOKEN] Issued new token for ${leviathanId}: ${reconnectToken.slice(0, 8)}...`);
     return reconnectToken;
   }
 
@@ -1112,9 +1128,13 @@ export class MatchRoom extends Room<MatchSchema> {
       graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
     };
 
+    console.log(`[TOKEN] sendReconnectToken: sending token ${reconnectToken.slice(0, 8)}... to client for ${leviathanId}`);
     if (typeof client.send === "function") {
       client.send("match.reconnect.token", payload);
       client.send("kaiju.reconnect.token", payload);
+      console.log(`[TOKEN] sendReconnectToken: messages sent`);
+    } else {
+      console.log(`[TOKEN] sendReconnectToken: client.send is not a function!`);
     }
   }
 

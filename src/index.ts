@@ -192,6 +192,7 @@ app.post("/api/matches/:roomId/kaiju-join", joinRateLimiter, async (req, res) =>
     const body = (req.body || {}) as Record<string, unknown>;
     const options: Record<string, unknown> = {
       ...(typeof body.playerName === "string" ? { playerName: body.playerName } : {}),
+      playerRole: "kaiju",
       ...(typeof body.reconnectToken === "string" ? { reconnectToken: body.reconnectToken } : {}),
     };
 
@@ -236,8 +237,11 @@ app.post("/api/matches/:roomId/join", joinRateLimiter, async (req, res) => {
     const body = (req.body || {}) as Record<string, unknown>;
     const options: Record<string, unknown> = {
       ...(typeof body.playerName === "string" ? { playerName: body.playerName } : {}),
+      ...(typeof body.playerRole === "string" ? { playerRole: body.playerRole } : {}),
       ...(typeof body.reconnectToken === "string" ? { reconnectToken: body.reconnectToken } : {}),
     };
+
+    console.log(`[TOKEN] /api/matches/join: roomId=${roomId}, playerRole=${body.playerRole || 'MISSING'}, reconnectToken from body=${body.reconnectToken ? String(body.reconnectToken).slice(0, 8) : 'MISSING'}`);
 
     const reservation = await matchMaker.joinById(roomId, options);
 
