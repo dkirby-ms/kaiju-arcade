@@ -46,6 +46,7 @@ app.use(
   express.static(path.resolve(__dirname, "../public/kaiju"))
 );
 app.use("/common", express.static(path.resolve(__dirname, "../public/common")));
+app.use("/lib", express.static(path.resolve(__dirname, "../public/lib")));
 app.use(express.static(path.resolve(__dirname, "../public")));
 
 app.get("/", (_req, res) => {
@@ -259,6 +260,77 @@ app.post("/api/matches/:roomId/join", joinRateLimiter, async (req, res) => {
       },
       message: "Seat reserved. Join with consumeSeatReservation.",
     });
+    span.end();
+  } catch (error) {
+    span.end(error as Error);
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// REST API: Get room state for polling (fallback when WebSocket unavailable)
+app.get("/api/matches/:roomId", async (req, res) => {
+  const span = startSpan("api.match.state", { roomId: req.params.roomId });
+  try {
+    const roomId = req.params.roomId;
+    if (!roomId) {
+      span.end();
+      res.status(400).json({ error: "roomId is required" });
+      return;
+    }
+
+    const rooms = await matchMaker.query({ roomId });
+    if (rooms.length === 0) {
+      res.status(404).json({ error: "Room not found" });
+      span.end();
+      return;
+    }
+
+    const room = rooms[0] as unknown as MatchRoom;
+    res.json({
+      room: {
+        roomId: room.roomId,
+        state: (room.state as any).toJSON?.() || {},
+      },
+    });
+    span.end();
+  } catch (error) {
+    span.end(error as Error);
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// REST API: Handle room actions via HTTP (fallback when WebSocket unavailable)
+app.post("/api/matches/:roomId/:action", async (req, res) => {
+  const span = startSpan("api.match.action", { roomId: req.params.roomId, action: req.params.action });
+  try {
+    const roomId = req.params.roomId;
+    const action = req.params.action;
+    
+    if (!roomId || !action) {
+      span.end();
+      res.status(400).json({ error: "roomId and action are required" });
+      return;
+    }
+
+    const rooms = await matchMaker.query({ roomId });
+    if (rooms.length === 0) {
+      res.status(404).json({ error: "Room not found" });
+      span.end();
+      return;
+    }
+
+    const room = rooms[0] as unknown as MatchRoom;
+    
+    // Convert hyphenated action to dot notation (e.g., "match-role-claim" -> "match.role.claim")
+    const messageType = action.replace(/-/g, ".");
+    
+    // Send the message to the room (this would normally come from a WebSocket client)
+    // The room's onMessage handler will process it
+    if ((room as any).onMessage) {
+      (room as any).onMessage(null, messageType, req.body || {});
+    }
+    
+    res.json({ success: true, message: "Action processed" });
     span.end();
   } catch (error) {
     span.end(error as Error);

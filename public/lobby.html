@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kaiju Arcade Matchmaking Lobby</title>
-    <script src="https://unpkg.com/colyseus.js@0.17.0/dist/colyseus.js"></script>
     <style>
       :root {
         color-scheme: dark;
@@ -435,7 +434,24 @@
           window.location.assign("/index.html");
         });
 
-        connectLobby();
+        // Wait for Colyseus client API to be ready (with fallback to REST-only)
+        function ensureColyseusClientReady(callback, maxAttempts = 20) {
+          if (window.KaijuColyseusClient) {
+            callback();
+            return;
+          }
+
+          if (maxAttempts <= 0) {
+            setError("Failed to initialize Colyseus client. Please refresh the page.");
+            return;
+          }
+
+          setTimeout(() => {
+            ensureColyseusClientReady(callback, maxAttempts - 1);
+          }, 100);
+        }
+
+        ensureColyseusClientReady(connectLobby);
       })();
     </script>
   </body>
