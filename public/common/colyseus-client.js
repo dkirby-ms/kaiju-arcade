@@ -97,12 +97,7 @@
     try {
       return await postJson(`/api/matches/${safeRoomId}/join`, payload);
     } catch (error) {
-      const role = String(payload?.role || payload?.playerRole || "").toLowerCase();
-      if (role !== "kaiju") {
-        throw error;
-      }
-
-      return postJson(`/api/matches/${safeRoomId}/kaiju-join`, payload);
+      throw error;
     }
   }
 

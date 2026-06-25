@@ -868,15 +868,43 @@
 
   function findControlledLeviathan() {
     if (!state.room || !state.room.state || !state.room.state.leviathans) {
+      console.log("[findControlledLeviathan] Missing room/state/leviathans");
       return null;
     }
 
     let controlled = null;
+    
+    // First, try to find by matching playerId (primary method)
     state.room.state.leviathans.forEach((leviathan) => {
       if (leviathan.playerId === state.room.sessionId) {
         controlled = leviathan;
       }
     });
+
+    if (controlled) {
+      console.log("[findControlledLeviathan] Found by playerId:", controlled.name, "playerId:", controlled.playerId, "sessionId:", state.room.sessionId);
+      return controlled;
+    }
+
+    // If not found by playerId, try by saved leviathanId (fallback for reconnection edge cases)
+    const activeSession = window.KaijuSession?.getActiveMatchSession?.();
+    const savedLeviathanId = activeSession?.leviathanId;
+    
+    console.log("[findControlledLeviathan DEBUG]", {
+      sessionId: state.room.sessionId,
+      leviathanCount: state.room.state.leviathans.length,
+      savedLeviathanId,
+      leviathans: state.room.state.leviathans.map(l => ({ id: l.id, name: l.name, playerId: l.playerId }))
+    });
+
+    if (savedLeviathanId) {
+      state.room.state.leviathans.forEach((leviathan) => {
+        if (leviathan.id === savedLeviathanId && leviathan.playerId === state.room.sessionId) {
+          controlled = leviathan;
+          console.log("[findControlledLeviathan] Found by leviathanId:", controlled.name);
+        }
+      });
+    }
 
     return controlled;
   }
@@ -1192,7 +1220,7 @@
 
     state.controlledLeviathan = findControlledLeviathan();
     updatePhaseUi();
-    updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
+    updateConnectionState(`ONLINE ROOM ${room.roomId || room.id || "unknown"}`, "nominal");
   }
 
   async function reconnectActiveMatch() {
@@ -1211,19 +1239,19 @@
     const client = window.KaijuColyseusClient.createClient();
 
     const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
-    const reconnectToken =
-      (window.KaijuSession && window.KaijuSession.getReconnectionToken()) || readStoredReconnectToken();
+    
+    const sessionToken = window.KaijuSession && window.KaijuSession.getReconnectionToken() ? window.KaijuSession.getReconnectionToken() : "";
+    const localToken = readStoredReconnectToken();
+    const reconnectToken = sessionToken || localToken;
+
+    console.log(`[TOKEN] reconnectActiveMatch: selectedRoomId=${selectedRoomId}, sessionToken=${sessionToken ? sessionToken.slice(0, 8) : 'EMPTY'}, localToken=${localToken ? localToken.slice(0, 8) : 'EMPTY'}, final=${reconnectToken ? reconnectToken.slice(0, 8) : 'EMPTY'}`);
 
     if (!reconnectToken) {
       routeUpstream(false);
       return;
     }
 
-    const room = await window.KaijuColyseusClient.joinMatchById(client, selectedRoomId, {
-      playerName: playerName,
-      playerRole: "kaiju",
-      reconnectToken,
-    });
+    const room = await client.reconnect(reconnectToken);
     bindRoom(room);
   }
 
@@ -1645,10 +1673,14 @@
 
     const currentMatchId =
       (window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "") || activeMatchSession?.roomId || "";
-    const reconnectToken =
-      (window.KaijuSession ? window.KaijuSession.getReconnectionToken() : "") ||
-      activeMatchSession?.reconnectToken ||
-      readStoredReconnectToken();
+    
+    const sessionToken = window.KaijuSession ? window.KaijuSession.getReconnectionToken() : "";
+    const activeToken = activeMatchSession?.reconnectToken || "";
+    const localStorageToken = readStoredReconnectToken();
+    
+    console.log(`[TOKEN] kaiju/app.js init: sessionToken=${sessionToken ? sessionToken.slice(0, 8) : 'EMPTY'}, activeToken=${activeToken ? activeToken.slice(0, 8) : 'EMPTY'}, localStorage=${localStorageToken ? localStorageToken.slice(0, 8) : 'EMPTY'}`);
+    
+    const reconnectToken = sessionToken || activeToken || localStorageToken;
 
     if (currentMatchId) {
       roomIdEl.value = currentMatchId;
