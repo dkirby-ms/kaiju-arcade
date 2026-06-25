@@ -81,6 +81,9 @@ export class LeviathanSchema extends Schema {
   @type("string")
   playerName: string = ""; // Display name of player
 
+  @type("boolean")
+  ready: boolean = false;
+
   @type("number")
   damageDealt: number = 0; // Total damage dealt this match
 
@@ -258,6 +261,9 @@ export class CommanderStateSchema extends Schema {
   @type("string")
   playerName: string = "";
 
+  @type("boolean")
+  ready: boolean = false;
+
   @type("string")
   selectedLeviathanId: string = ""; // Currently selected kaiju for dispatch
 
@@ -282,6 +288,23 @@ export class CommanderStateSchema extends Schema {
   }
 }
 
+export class MatchParticipantSchema extends Schema {
+  @type("string")
+  sessionId: string = "";
+
+  @type("string")
+  playerName: string = "";
+
+  @type("string")
+  claimedRole: string = "";
+
+  @type("boolean")
+  ready: boolean = false;
+
+  @type("string")
+  leviathanId: string = "";
+}
+
 /**
  * Main Match Schema
  * Root Colyseus schema - this is what gets synchronized
@@ -295,6 +318,9 @@ export class MatchSchema extends Schema {
 
   @type(CommanderStateSchema)
   commander: CommanderStateSchema = new CommanderStateSchema();
+
+  @type([MatchParticipantSchema])
+  participants: ArraySchema<MatchParticipantSchema> = new ArraySchema();
 
   @type([LeviathanSchema])
   leviathans: ArraySchema<LeviathanSchema> = new ArraySchema();
@@ -316,6 +342,10 @@ export class MatchSchema extends Schema {
    */
   getLeviathan(id: string): LeviathanSchema | undefined {
     return this.leviathans.find((l: LeviathanSchema) => l.id === id);
+  }
+
+  getParticipant(sessionId: string): MatchParticipantSchema | undefined {
+    return this.participants.find((participant: MatchParticipantSchema) => participant.sessionId === sessionId);
   }
 
   /**
@@ -444,10 +474,18 @@ export class MatchSchema extends Schema {
       commander: {
         playerId: this.commander.playerId,
         playerName: this.commander.playerName,
+        ready: this.commander.ready,
         selectedLeviathanId: this.commander.selectedLeviathanId,
         assetsRemaining: Object.fromEntries(this.commander.assetsRemaining),
         assetCooldowns: Object.fromEntries(this.commander.assetCooldowns),
       },
+      participants: this.participants.map((participant: MatchParticipantSchema) => ({
+        sessionId: participant.sessionId,
+        playerName: participant.playerName,
+        claimedRole: participant.claimedRole,
+        ready: participant.ready,
+        leviathanId: participant.leviathanId,
+      })),
       leviathans: this.leviathans.map((leviathan: LeviathanSchema) => ({
         id: leviathan.id,
         name: leviathan.name,
@@ -472,6 +510,7 @@ export class MatchSchema extends Schema {
         isSpectator: leviathan.isSpectator,
         playerId: leviathan.playerId,
         playerName: leviathan.playerName,
+        ready: leviathan.ready,
         damageDealt: leviathan.damageDealt,
         damageReceived: leviathan.damageReceived,
       })),
@@ -544,6 +583,7 @@ export class MatchSchema extends Schema {
 
     state.commander.playerId = snapshot.commander.playerId;
     state.commander.playerName = snapshot.commander.playerName;
+    state.commander.ready = snapshot.commander.ready;
     state.commander.selectedLeviathanId = snapshot.commander.selectedLeviathanId;
     state.commander.assetsRemaining.clear();
     for (const [assetName, count] of Object.entries(snapshot.commander.assetsRemaining)) {
@@ -552,6 +592,17 @@ export class MatchSchema extends Schema {
     state.commander.assetCooldowns.clear();
     for (const [assetName, cooldownAt] of Object.entries(snapshot.commander.assetCooldowns)) {
       state.commander.assetCooldowns.set(assetName, cooldownAt);
+    }
+
+    state.participants.clear();
+    for (const participantSnapshot of snapshot.participants) {
+      const participant = new MatchParticipantSchema();
+      participant.sessionId = participantSnapshot.sessionId;
+      participant.playerName = participantSnapshot.playerName;
+      participant.claimedRole = participantSnapshot.claimedRole;
+      participant.ready = participantSnapshot.ready;
+      participant.leviathanId = participantSnapshot.leviathanId;
+      state.participants.push(participant);
     }
 
     state.leviathans.clear();
@@ -580,6 +631,7 @@ export class MatchSchema extends Schema {
       leviathan.isSpectator = leviathanSnapshot.isSpectator;
       leviathan.playerId = leviathanSnapshot.playerId;
       leviathan.playerName = leviathanSnapshot.playerName;
+      leviathan.ready = leviathanSnapshot.ready;
       leviathan.damageDealt = leviathanSnapshot.damageDealt;
       leviathan.damageReceived = leviathanSnapshot.damageReceived;
       state.leviathans.push(leviathan);
@@ -649,6 +701,7 @@ export interface MatchSnapshot {
   metadata: MatchMetadataSnapshot;
   cityBase: CityBaseSnapshot;
   commander: CommanderSnapshot;
+  participants: MatchParticipantSnapshot[];
   leviathans: LeviathanSnapshot[];
   dispatchHistory: DispatchRecordSnapshot[];
   kaijuAbilityResults: KaijuAbilityResultSnapshot[];
@@ -682,9 +735,18 @@ export interface CityBaseSnapshot {
 export interface CommanderSnapshot {
   playerId: string;
   playerName: string;
+  ready: boolean;
   selectedLeviathanId: string;
   assetsRemaining: Record<string, number>;
   assetCooldowns: Record<string, number>;
+}
+
+export interface MatchParticipantSnapshot {
+  sessionId: string;
+  playerName: string;
+  claimedRole: string;
+  ready: boolean;
+  leviathanId: string;
 }
 
 export interface LeviathanSnapshot {
@@ -711,6 +773,7 @@ export interface LeviathanSnapshot {
   isSpectator: boolean;
   playerId: string;
   playerName: string;
+  ready: boolean;
   damageDealt: number;
   damageReceived: number;
 }

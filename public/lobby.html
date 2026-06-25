@@ -98,6 +98,11 @@
         color: var(--ink);
       }
 
+      .secondary:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
       .danger {
         background: rgba(255, 123, 123, 0.22);
         color: #ffd6d6;
@@ -138,6 +143,12 @@
         font-size: 0.95rem;
       }
 
+      .room-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
       .error {
         color: var(--danger);
         font-weight: 700;
@@ -151,7 +162,6 @@
 
       <section class="identity" aria-label="Current player identity">
         <div class="pill"><strong>Player</strong><span id="playerName">-</span></div>
-        <div class="pill"><strong>Role</strong><span id="playerRole">-</span></div>
       </section>
 
       <section class="controls" aria-label="Lobby actions">
@@ -168,6 +178,7 @@
 
     <script src="/common/session-manager.js"></script>
     <script src="/common/colyseus-client.js"></script>
+    <script src="/common/lobby-slot-controls.js"></script>
     <script>
       (() => {
         const state = {
@@ -178,7 +189,6 @@
         };
 
         const playerNameEl = document.getElementById("playerName");
-        const playerRoleEl = document.getElementById("playerRole");
         const statusTextEl = document.getElementById("statusText");
         const errorTextEl = document.getElementById("errorText");
         const roomListEl = document.getElementById("roomList");
@@ -197,7 +207,6 @@
         function updateIdentityHeader() {
           const entrySession = window.KaijuSession.getEntrySession();
           playerNameEl.textContent = entrySession.playerName || "-";
-          playerRoleEl.textContent = entrySession.role || "-";
           return entrySession;
         }
 
@@ -205,18 +214,65 @@
           const entrySession = window.KaijuSession.getEntrySession();
           return {
             playerName: entrySession.playerName,
-            role: entrySession.role,
           };
         }
 
-        function redirectToRoleClient(role) {
-          const path = role === "commander" ? "/commander/index.html" : "/kaiju/index.html";
-          window.location.assign(path);
+        function redirectToMatchRoom() {
+          window.location.assign("/match-room.html");
         }
 
         function setBusy(value) {
           state.isBusy = Boolean(value);
           createMatchButtonEl.disabled = state.isBusy;
+        }
+
+        function storePendingReservation(reservation) {
+          if (!reservation || !window.KaijuSession) {
+            return;
+          }
+
+          const pendingReservation = {
+            sessionId: reservation.sessionId,
+            roomId: reservation.roomId,
+            roomName: reservation.roomName || "match",
+            processId: reservation.processId,
+            publicAddress: reservation.publicAddress,
+          };
+
+          window.KaijuSession.setCurrentRoomContext({
+            roomId: reservation.roomId || "",
+            roomName: reservation.roomName || "match",
+          });
+          window.KaijuSession.setReconnectionToken("");
+          window.KaijuSession.setPendingSeatReservation(pendingReservation);
+        }
+
+        async function leaveLobbyRoom() {
+          if (!state.lobbyRoom) {
+            return;
+          }
+
+          try {
+            await state.lobbyRoom.leave();
+          } catch {
+            // Best-effort cleanup only.
+          }
+
+          state.lobbyRoom = null;
+        }
+
+        function getRoomSlots(room) {
+          if (window.KaijuLobbySlots && typeof window.KaijuLobbySlots.deriveSlotButtonState === "function") {
+            return window.KaijuLobbySlots.deriveSlotButtonState(room, state.isBusy);
+          }
+
+          return {
+            commanderAvailable: true,
+            kaijuAvailable: true,
+            kaijuOpenSlots: 0,
+            joinCommanderDisabled: state.isBusy,
+            joinKaijuDisabled: state.isBusy,
+          };
         }
 
         function renderRooms() {
@@ -246,23 +302,32 @@
 
             const metaEl = document.createElement("div");
             metaEl.className = "room-meta";
+            const slots = getRoomSlots(room);
             metaEl.innerHTML = `
               <span>Players: ${room.clients}/${room.maxClients || "-"}</span>
               <span>Mode: ${room.metadata?.gameMode || "standard"}</span>
               <span>City: ${room.metadata?.cityName || "Unknown"}</span>
+              <span>Commander: ${slots.commanderAvailable ? "Open" : "Taken"}</span>
+              <span>Kaiju Slots Open: ${slots.kaijuOpenSlots}</span>
             `;
 
-            const joinBtn = document.createElement("button");
-            joinBtn.className = "secondary";
-            joinBtn.type = "button";
-            joinBtn.textContent = "Join Match";
-            joinBtn.addEventListener("click", () => {
+            const actionRowEl = document.createElement("div");
+            actionRowEl.className = "room-actions";
+
+            const joinMatchBtn = document.createElement("button");
+            joinMatchBtn.className = "secondary";
+            joinMatchBtn.type = "button";
+            joinMatchBtn.textContent = "Enter Match Room";
+            joinMatchBtn.disabled = state.isBusy || (!slots.commanderAvailable && !slots.kaijuAvailable);
+            joinMatchBtn.addEventListener("click", () => {
               joinMatch(room.roomId);
             });
 
+            actionRowEl.appendChild(joinMatchBtn);
+
             rowEl.appendChild(titleRowEl);
             rowEl.appendChild(metaEl);
-            rowEl.appendChild(joinBtn);
+            rowEl.appendChild(actionRowEl);
             roomListEl.appendChild(rowEl);
           });
         }
@@ -281,20 +346,16 @@
 
           setError("");
           setBusy(true);
-          setStatus(`Joining match ${roomId}...`);
+          setStatus(`Reserving entry for match ${roomId}...`);
 
           try {
             const joinOptions = getJoinOptions();
-            const room = await window.KaijuColyseusClient.joinMatchById(state.client, roomId, joinOptions);
+            const reservation = await window.KaijuColyseusClient.joinMatchReservationViaRest(roomId, joinOptions);
 
-            window.KaijuSession.setCurrentMatchId(room.roomId || roomId);
-            window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+            storePendingReservation(reservation);
+            await leaveLobbyRoom();
 
-            if (state.lobbyRoom) {
-              await state.lobbyRoom.leave();
-            }
-
-            redirectToRoleClient(joinOptions.role);
+            redirectToMatchRoom();
           } catch (error) {
             setError(error instanceof Error ? error.message : "Failed to join selected match.");
             setStatus("Lobby connected.");
@@ -314,16 +375,12 @@
 
           try {
             const joinOptions = getJoinOptions();
-            const room = await window.KaijuColyseusClient.createMatch(state.client, joinOptions);
+            const reservation = await window.KaijuColyseusClient.createMatchReservationViaRest(joinOptions);
 
-            window.KaijuSession.setCurrentMatchId(room.roomId || "");
-            window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+            storePendingReservation(reservation);
+            await leaveLobbyRoom();
 
-            if (state.lobbyRoom) {
-              await state.lobbyRoom.leave();
-            }
-
-            redirectToRoleClient(joinOptions.role);
+            redirectToMatchRoom();
           } catch (error) {
             setError(error instanceof Error ? error.message : "Failed to create match.");
             setStatus("Lobby connected.");
@@ -334,7 +391,7 @@
 
         function ensureEntrySession() {
           const entrySession = updateIdentityHeader();
-          if (!entrySession.playerName || !entrySession.role) {
+          if (!entrySession.playerName) {
             window.location.assign("/index.html");
             return false;
           }
@@ -352,7 +409,9 @@
 
           try {
             state.client = window.KaijuColyseusClient.createClient();
-            state.lobbyRoom = await window.KaijuColyseusClient.joinLobby(state.client, getJoinOptions());
+            state.lobbyRoom = await window.KaijuColyseusClient.joinLobby(state.client, {
+              playerName: window.KaijuSession.getPlayerName(),
+            });
 
             window.KaijuColyseusClient.bindLobbyRoomListHandlers(state.lobbyRoom, {
               onRooms: (rooms) => normalizeRoomList(rooms),

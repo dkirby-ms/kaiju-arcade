@@ -9,11 +9,15 @@ import { Room, Client } from "colyseus";
 import {
   MatchSchema,
   LeviathanSchema,
+  MatchParticipantSchema,
   GAME_CONSTANTS,
 } from "../schema/MatchSchema";
 import {
   ClientMessage,
   getCommanderSelectLeviathanId,
+  validateMatchReady,
+  validateMatchRoleClaim,
+  validateMatchRoleRelease,
   validateCommanderSelect,
   validateCommanderDispatch,
   validateKaijuMove,
@@ -41,12 +45,15 @@ const COMMANDER_DISPATCH_COOLDOWN_MS: Record<string, number> = {
 
 const COMMANDER_TARGETED_ASSETS = new Set<string>(["Scramble Jets", "Deploy Mechs"]);
 
+type PlayerRole = "COMMANDER" | "KAIJU";
+
 interface PlayerSession {
   clientId: string;
   sessionId: string;
-  role: "COMMANDER" | "KAIJU";
+  role?: PlayerRole;
   leviathanId?: string;
   playerName: string;
+  ready: boolean;
 }
 
 interface MatchResultSummary {
@@ -66,15 +73,23 @@ interface ReconnectGraceWindow {
 }
 
 interface ReconnectTokenPayload {
-  type: "kaiju.reconnect.token";
+  type: "match.reconnect.token";
+  role: "COMMANDER" | "KAIJU";
   leviathanId: string;
   reconnectToken: string;
   graceWindowMs: number;
 }
 
+interface CommanderReconnectWindow {
+  reconnectToken: string;
+  expiresAt: number;
+  timeoutId: NodeJS.Timeout;
+  playerName: string;
+}
+
 interface JoinRejectionTelemetry {
   type: "match.join.rejected";
-  reason: "capacity";
+  reason: "capacity" | "invalid-role";
   matchId: string;
   clientId: string;
   sessionId: string;
@@ -101,6 +116,7 @@ export class MatchRoom extends Room<MatchSchema> {
   private playerSessions: Map<string, PlayerSession> = new Map();
   private reconnectGraceWindows: Map<string, ReconnectGraceWindow> = new Map();
   private reconnectTokenByLeviathanId: Map<string, string> = new Map();
+  private commanderReconnectWindow?: CommanderReconnectWindow;
   private tickIntervalId?: NodeJS.Timeout;
   private lastTickTime: number = 0;
   private tickDeltaMs: number = 0;
@@ -124,10 +140,15 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state.metadata.startedAt = Date.now();
     this.state.metadata.state = "WAITING";
     this.updateRoomListingMetadata({
+      state: "WAITING",
       status: "waiting",
       playerCount: 0,
       maxPlayers: this.maxClients,
       commanderName: "",
+      commanderTaken: false,
+      kaijuOpenSlots: MatchRoom.MAX_KAIJU_SLOTS,
+      cityName: this.state.cityBase.cityName,
+      gameMode: "standard",
     });
 
     // Initialize city base from options or use default
@@ -182,54 +203,101 @@ export class MatchRoom extends Room<MatchSchema> {
         : typeof options?.playerRole === "string"
           ? options.playerRole.toUpperCase()
           : undefined;
-    const hasCommander = this.state.commander.playerId.length > 0;
-    const wantsCommander = requestedRole === "COMMANDER";
-    const assignCommander = wantsCommander ? !hasCommander : !hasCommander;
+    const hasRequestedRole = requestedRole !== undefined;
+
+    if (
+      hasRequestedRole &&
+      requestedRole !== "COMMANDER" &&
+      requestedRole !== "KAIJU"
+    ) {
+      this.emitJoinRejectionTelemetry(client, "invalid-role");
+      this.rejectJoin(client, "Role must be commander or kaiju");
+      return;
+    }
 
     const playerName = (options?.playerName as string) || `Player_${client.sessionId.slice(0, 6)}`;
 
     const session: PlayerSession = {
       clientId: client.id,
       sessionId: client.sessionId,
-      role: assignCommander ? "COMMANDER" : "KAIJU",
       playerName,
+      ready: false,
     };
 
-    if (assignCommander) {
-      // Assign Commander
-      this.state.commander.playerId = client.sessionId;
-      this.state.commander.playerName = playerName;
-      session.role = "COMMANDER";
-      console.log(`${playerName} assigned as COMMANDER`);
-      this.emitSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
-      this.refreshLobbyMetadata();
-    } else {
-      const reconnectToken =
-        typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
+    this.playerSessions.set(client.sessionId, session);
+    this.addParticipant(session);
 
-      // Reclaim by reconnect token first, then claim an open AI slot.
-      const leviathan =
-        this.reclaimKaijuGraceSlot(reconnectToken, client.sessionId, playerName) ??
-        this.claimKaijuSlot(client.sessionId, playerName);
-      if (!leviathan) {
-        console.warn("No kaiju slot available for joining player");
-        this.emitJoinRejectionTelemetry(client, "capacity");
-        this.rejectJoin(client, "No kaiju slot available");
+    const reconnectToken =
+      typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
+    if (reconnectToken) {
+      if (this.tryReclaimCommanderSession(client, session, reconnectToken)) {
+        this.refreshLobbyMetadata();
+        this.reconcileLobbyPhase();
         return;
       }
 
-      session.leviathanId = leviathan.id;
-      this.sendReconnectToken(client, leviathan.id);
-      console.log(`${playerName} assigned as KAIJU ${leviathan.name}`);
-      this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
+      this.tryReclaimKaijuSession(client, session, reconnectToken);
     }
 
-    this.playerSessions.set(client.sessionId, session);
+    if (requestedRole === "COMMANDER" || requestedRole === "KAIJU") {
+      const claimed = this.handleRoleClaim(client, session, requestedRole);
+      if (!claimed) {
+        const rejectionReason = requestedRole === "COMMANDER" ? "Commander slot already taken" : "No kaiju slot available";
+        this.removeParticipant(client.sessionId);
+        this.playerSessions.delete(client.sessionId);
+        this.emitJoinRejectionTelemetry(client, "capacity");
+        this.rejectJoin(client, rejectionReason);
+        return;
+      }
+    }
+
     this.refreshLobbyMetadata();
-    this.tryEnterLobbyPhase();
+    this.reconcileLobbyPhase();
 
     if (this.state.metadata.state === "WAITING") {
       this.broadcastMatchPhase("WAITING");
+    }
+  }
+
+  onLeave(client: Client, code?: number) {
+    console.log(`Client ${client.sessionId} left`);
+
+    const session = this.playerSessions.get(client.sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.role === "COMMANDER") {
+      this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
+      const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
+      if (disconnectedAbruptly) {
+        this.startCommanderReconnectWindow(session);
+      } else {
+        this.releaseCommanderClaim(session, false);
+      }
+    } else if (session.role === "KAIJU" && session.leviathanId) {
+      const leviathan = this.state.getLeviathan(session.leviathanId);
+      if (leviathan) {
+        const hasReconnectCredits = leviathan.credits > 0;
+        const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
+        const canGraceReconnect = disconnectedAbruptly && hasReconnectCredits;
+
+        if (canGraceReconnect) {
+          this.startReconnectGraceWindow(leviathan, session);
+        } else {
+          this.releaseKaijuClaim(session, false);
+        }
+      }
+    }
+
+    this.removeParticipant(client.sessionId);
+    this.playerSessions.delete(client.sessionId);
+    this.refreshLobbyMetadata();
+    this.reconcileLobbyPhase();
+
+    // If room is empty, it will auto-dispose
+    if (this.playerSessions.size === 0) {
+      this.disconnect();
     }
   }
 
@@ -240,7 +308,7 @@ export class MatchRoom extends Room<MatchSchema> {
     }
   }
 
-  private emitJoinRejectionTelemetry(client: Client, reason: "capacity") {
+  private emitJoinRejectionTelemetry(client: Client, reason: "capacity" | "invalid-role") {
     const telemetry: JoinRejectionTelemetry = {
       type: "match.join.rejected",
       reason,
@@ -258,50 +326,6 @@ export class MatchRoom extends Room<MatchSchema> {
     console.warn(JSON.stringify(telemetry));
   }
 
-  onLeave(client: Client, code?: number) {
-    console.log(`Client ${client.sessionId} left`);
-
-    const session = this.playerSessions.get(client.sessionId);
-    if (!session) {
-      return;
-    }
-
-    if (session.role === "COMMANDER") {
-      // Commander disconnected - replace with AI or end match
-      this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
-      // For now, just mark as disconnected; could implement AI takeover
-      if (this.state.metadata.state === "ACTIVE") {
-        this.state.metadata.state = "ENDED";
-        this.state.metadata.outcome = "ABORTED";
-        this.refreshLobbyMetadata();
-      }
-    } else {
-      // Kaiju player disconnected - start 30s grace window for reconnection.
-      if (session.leviathanId) {
-        const leviathan = this.state.getLeviathan(session.leviathanId);
-        if (leviathan) {
-          const hasReconnectCredits = leviathan.credits > 0;
-          const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
-          const canGraceReconnect = disconnectedAbruptly && hasReconnectCredits;
-
-          if (canGraceReconnect) {
-            this.startReconnectGraceWindow(leviathan, session);
-          } else {
-            this.promoteSlotToAI(leviathan);
-          }
-        }
-      }
-    }
-
-    this.playerSessions.delete(client.sessionId);
-    this.refreshLobbyMetadata();
-
-    // If room is empty, it will auto-dispose
-    if (this.playerSessions.size === 0) {
-      this.disconnect();
-    }
-  }
-
   private handleClientMessage(client: Client, message: ClientMessage) {
     const session = this.playerSessions.get(client.sessionId);
     if (!session) {
@@ -311,6 +335,24 @@ export class MatchRoom extends Room<MatchSchema> {
 
     try {
       switch (message.type) {
+        case "match.role.claim":
+          if (validateMatchRoleClaim(message)) {
+            this.handleRoleClaim(client, session, message.role);
+          }
+          break;
+
+        case "match.role.release":
+          if (validateMatchRoleRelease(message)) {
+            this.handleRoleRelease(session);
+          }
+          break;
+
+        case "match.ready":
+          if (validateMatchReady(message)) {
+            this.handleReadyUpdate(session, message.ready);
+          }
+          break;
+
         case "commander.select":
           if (validateCommanderSelect(message) && session.role === "COMMANDER") {
             this.handleCommanderSelect(getCommanderSelectLeviathanId(message));
@@ -374,23 +416,139 @@ export class MatchRoom extends Room<MatchSchema> {
       return;
     }
 
-    this.startMatch();
-  }
-
-  private tryEnterLobbyPhase() {
-    const hasCommander = this.state.commander.playerId.length > 0;
-    const hasKaiju = this.state.leviathans.some(
-      (leviathan: LeviathanSchema) => !leviathan.isAI && leviathan.playerId.length > 0
-    );
-
-    if (!hasCommander || !hasKaiju || this.state.metadata.state !== "WAITING") {
+    const startCheck = this.validateStartRequirements();
+    if (!startCheck.valid) {
+      this.emitSignal(startCheck.reason, "alert", "SYSTEM");
       return;
     }
 
-    this.state.metadata.state = "LOBBY";
-    this.emitSignal("LOBBY READY", "nominal", "SYSTEM");
+    this.startMatch();
+  }
+
+  private reconcileLobbyPhase() {
+    if (this.state.metadata.state === "ACTIVE" || this.state.metadata.state === "ENDED") {
+      return;
+    }
+
+    const hasMinimumPlayers = this.playerSessions.size >= 2;
+    if (hasMinimumPlayers && this.state.metadata.state === "WAITING") {
+      this.state.metadata.state = "LOBBY";
+      this.emitSignal("LOBBY READY", "nominal", "SYSTEM");
+      this.refreshLobbyMetadata();
+      this.broadcastMatchPhase("LOBBY");
+      return;
+    }
+
+    if (!hasMinimumPlayers && this.state.metadata.state === "LOBBY") {
+      this.state.metadata.state = "WAITING";
+      this.refreshLobbyMetadata();
+      this.broadcastMatchPhase("WAITING");
+    }
+  }
+
+  private handleRoleClaim(client: Client, session: PlayerSession, role: PlayerRole): boolean {
+    if (this.state.metadata.state === "ACTIVE" || this.state.metadata.state === "ENDED") {
+      return false;
+    }
+
+    if (session.role === role) {
+      return true;
+    }
+
+    if (session.role) {
+      this.handleRoleRelease(session);
+    }
+
+    if (role === "COMMANDER") {
+      if (this.state.commander.playerId.length > 0) {
+        this.emitSignal("ROLE CLAIM REJECTED - COMMANDER SLOT TAKEN", "alert", "SYSTEM");
+        return false;
+      }
+
+      session.role = "COMMANDER";
+      session.ready = false;
+      session.leviathanId = undefined;
+      this.state.commander.playerId = session.sessionId;
+      this.state.commander.playerName = session.playerName;
+      this.state.commander.ready = false;
+      this.syncParticipant(session);
+      this.refreshLobbyMetadata();
+      this.emitSignal(`COMMANDER ${session.playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
+      return true;
+    }
+
+    const leviathan = this.claimKaijuSlot(session.sessionId, session.playerName);
+    if (!leviathan) {
+      this.emitSignal("ROLE CLAIM REJECTED - NO KAIJU SLOT AVAILABLE", "alert", "SYSTEM");
+      return false;
+    }
+
+    session.role = "KAIJU";
+    session.ready = false;
+    session.leviathanId = leviathan.id;
+    this.syncParticipant(session);
+    this.sendReconnectToken(client, leviathan.id);
     this.refreshLobbyMetadata();
-    this.broadcastMatchPhase("LOBBY");
+    this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
+    return true;
+  }
+
+  private handleRoleRelease(session: PlayerSession) {
+    if (session.role === "COMMANDER") {
+      this.releaseCommanderClaim(session, true);
+    } else if (session.role === "KAIJU") {
+      this.releaseKaijuClaim(session, true);
+    }
+
+    this.refreshLobbyMetadata();
+  }
+
+  private handleReadyUpdate(session: PlayerSession, ready: boolean) {
+    if (!session.role) {
+      this.emitSignal("READY REJECTED - ROLE CLAIM REQUIRED", "alert", "SYSTEM");
+      return;
+    }
+
+    session.ready = ready;
+    if (session.role === "COMMANDER") {
+      this.state.commander.ready = ready;
+    } else if (session.leviathanId) {
+      const leviathan = this.state.getLeviathan(session.leviathanId);
+      if (leviathan) {
+        leviathan.ready = ready;
+      }
+    }
+
+    this.syncParticipant(session);
+  }
+
+  private validateStartRequirements(): { valid: boolean; reason: string } {
+    if (this.playerSessions.size < 2) {
+      return { valid: false, reason: "MATCH START REJECTED - MINIMUM PLAYERS REQUIRED" };
+    }
+
+    const participants = this.state.participants;
+    if (participants.some((participant: MatchParticipantSchema) => participant.claimedRole.length === 0)) {
+      return { valid: false, reason: "MATCH START REJECTED - ALL PLAYERS MUST CLAIM ROLE" };
+    }
+
+    if (this.state.commander.playerId.length === 0) {
+      return { valid: false, reason: "MATCH START REJECTED - COMMANDER REQUIRED" };
+    }
+
+    const hasKaiju = this.state.leviathans.some(
+      (leviathan: LeviathanSchema) => !leviathan.isAI && leviathan.playerId.length > 0
+    );
+    if (!hasKaiju) {
+      return { valid: false, reason: "MATCH START REJECTED - KAIJU REQUIRED" };
+    }
+
+    const everyoneReady = participants.every((participant: MatchParticipantSchema) => participant.ready);
+    if (!everyoneReady || !this.state.commander.ready) {
+      return { valid: false, reason: "MATCH START REJECTED - ALL PLAYERS MUST BE READY" };
+    }
+
+    return { valid: true, reason: "" };
   }
 
   private handleCommanderSelect(leviathanId: string) {
@@ -634,7 +792,44 @@ export class MatchRoom extends Room<MatchSchema> {
     slot.credits = GAME_CONSTANTS.CREDIT_COUNT;
     slot.moveX = 0;
     slot.moveY = 0;
+    slot.ready = false;
     return slot;
+  }
+
+  private tryReclaimKaijuSession(client: Client, session: PlayerSession, reconnectToken: string) {
+    const leviathan = this.reclaimKaijuGraceSlot(reconnectToken, client.sessionId, session.playerName);
+    if (!leviathan) {
+      return;
+    }
+
+    session.role = "KAIJU";
+    session.leviathanId = leviathan.id;
+    session.ready = leviathan.ready;
+    this.syncParticipant(session);
+    this.sendReconnectToken(client, leviathan.id);
+  }
+
+  private tryReclaimCommanderSession(client: Client, session: PlayerSession, reconnectToken: string): boolean {
+    if (!this.commanderReconnectWindow) {
+      return false;
+    }
+
+    if (this.commanderReconnectWindow.reconnectToken !== reconnectToken) {
+      return false;
+    }
+
+    clearTimeout(this.commanderReconnectWindow.timeoutId);
+    this.commanderReconnectWindow = undefined;
+
+    session.role = "COMMANDER";
+    session.ready = this.state.commander.ready;
+    session.leviathanId = undefined;
+    this.state.commander.playerId = session.sessionId;
+    this.state.commander.playerName = session.playerName;
+    this.syncParticipant(session);
+    this.sendCommanderReconnectToken(client);
+    this.emitSignal(`COMMANDER ${session.playerName.toUpperCase()} RECONNECTED`, "nominal", "SYSTEM");
+    return true;
   }
 
   private reclaimKaijuGraceSlot(
@@ -728,10 +923,121 @@ export class MatchRoom extends Room<MatchSchema> {
     leviathan.playerName = session.playerName;
   }
 
+  private startCommanderReconnectWindow(session: PlayerSession) {
+    if (this.commanderReconnectWindow) {
+      clearTimeout(this.commanderReconnectWindow.timeoutId);
+    }
+
+    const reconnectToken = uuid();
+    const timeoutId = setTimeout(() => {
+      if (!this.commanderReconnectWindow) {
+        return;
+      }
+
+      this.commanderReconnectWindow = undefined;
+      this.state.metadata.state = "ENDED";
+      this.state.metadata.outcome = "ABORTED";
+      this.emitSignal("COMMANDER RECONNECT WINDOW EXPIRED - MATCH ABORTED", "critical", "SYSTEM");
+    }, MatchRoom.RECONNECT_GRACE_MS);
+
+    this.commanderReconnectWindow = {
+      reconnectToken,
+      expiresAt: Date.now() + MatchRoom.RECONNECT_GRACE_MS,
+      timeoutId,
+      playerName: session.playerName,
+    };
+
+    this.state.commander.playerId = "";
+    this.sendCommanderReconnectToken();
+  }
+
   private promoteSlotToAI(leviathan: LeviathanSchema) {
+    const slotIndex = this.state.leviathans.findIndex((candidate: LeviathanSchema) => candidate.id === leviathan.id);
     leviathan.isAI = true;
     leviathan.playerId = "";
     leviathan.playerName = "";
+    leviathan.ready = false;
+    if (slotIndex >= 0) {
+      leviathan.name = `${leviathan.archetype}-AI-${slotIndex + 1}`;
+    }
+  }
+
+  private releaseCommanderClaim(session: PlayerSession, resetSession: boolean) {
+    this.state.commander.playerId = "";
+    this.state.commander.playerName = "";
+    this.state.commander.ready = false;
+    this.state.commander.selectedLeviathanId = "";
+
+    if (resetSession) {
+      session.role = undefined;
+      session.ready = false;
+      session.leviathanId = undefined;
+    }
+
+    this.syncParticipant(session);
+  }
+
+  private releaseKaijuClaim(session: PlayerSession, resetSession: boolean) {
+    if (session.leviathanId) {
+      const leviathan = this.state.getLeviathan(session.leviathanId);
+      if (leviathan) {
+        this.promoteSlotToAI(leviathan);
+      }
+    }
+
+    if (resetSession) {
+      session.role = undefined;
+      session.ready = false;
+      session.leviathanId = undefined;
+    }
+
+    this.syncParticipant(session);
+  }
+
+  private addParticipant(session: PlayerSession) {
+    const participant = this.state.getParticipant(session.sessionId);
+    if (participant) {
+      return;
+    }
+
+    const nextParticipant = this.createParticipant(session);
+    this.state.participants.push(nextParticipant);
+  }
+
+  private syncParticipant(session: PlayerSession) {
+    const participant = this.state.getParticipant(session.sessionId);
+    if (!participant) {
+      return;
+    }
+
+    participant.playerName = session.playerName;
+    participant.claimedRole = session.role ?? "";
+    participant.ready = session.ready;
+    participant.leviathanId = session.leviathanId ?? "";
+  }
+
+  private removeParticipant(sessionId: string) {
+    const participantIndex = this.state.participants.findIndex(
+      (participant: MatchParticipantSchema) => participant.sessionId === sessionId
+    );
+    if (participantIndex >= 0) {
+      this.state.participants.splice(participantIndex, 1);
+    }
+  }
+
+  private createParticipant(session: PlayerSession) {
+    const participant = this.state.getParticipant(session.sessionId);
+    if (participant) {
+      return participant;
+    }
+
+    const createdParticipant = new MatchParticipantSchema();
+    createdParticipant.sessionId = session.sessionId;
+    createdParticipant.playerName = session.playerName;
+    createdParticipant.claimedRole = session.role ?? "";
+    createdParticipant.ready = session.ready;
+    createdParticipant.leviathanId = session.leviathanId ?? "";
+    return createdParticipant;
   }
 
   private issueReconnectToken(leviathanId: string): string {
@@ -744,14 +1050,39 @@ export class MatchRoom extends Room<MatchSchema> {
     const reconnectToken = this.issueReconnectToken(leviathanId);
 
     const payload: ReconnectTokenPayload = {
-      type: "kaiju.reconnect.token",
+      type: "match.reconnect.token",
+      role: "KAIJU",
       leviathanId,
       reconnectToken,
       graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
     };
 
     if (typeof client.send === "function") {
+      client.send("match.reconnect.token", payload);
       client.send("kaiju.reconnect.token", payload);
+    }
+  }
+
+  private sendCommanderReconnectToken(client?: Client) {
+    if (!this.commanderReconnectWindow) {
+      return;
+    }
+
+    const payload: ReconnectTokenPayload = {
+      type: "match.reconnect.token",
+      role: "COMMANDER",
+      leviathanId: "",
+      reconnectToken: this.commanderReconnectWindow.reconnectToken,
+      graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
+    };
+
+    if (client && typeof client.send === "function") {
+      client.send("match.reconnect.token", payload);
+      return;
+    }
+
+    if (typeof this.broadcast === "function") {
+      this.broadcast("match.reconnect.token", payload);
     }
   }
 
@@ -771,11 +1102,21 @@ export class MatchRoom extends Room<MatchSchema> {
   }
 
   private refreshLobbyMetadata() {
+    const commanderTaken = this.state.commander.playerId.length > 0;
+    const kaijuOpenSlots = this.state.leviathans.filter(
+      (leviathan: LeviathanSchema) => leviathan.isAI && leviathan.playerId.length === 0
+    ).length;
+
     this.updateRoomListingMetadata({
+      state: this.state.metadata.state,
       status: this.state.metadata.state.toLowerCase(),
       playerCount: this.playerSessions.size,
       maxPlayers: this.maxClients,
       commanderName: this.state.commander.playerName,
+      commanderTaken,
+      kaijuOpenSlots,
+      cityName: this.state.cityBase.cityName,
+      gameMode: "standard",
     });
   }
 
@@ -1130,6 +1471,10 @@ export class MatchRoom extends Room<MatchSchema> {
 
     for (const graceWindow of this.reconnectGraceWindows.values()) {
       clearTimeout(graceWindow.timeoutId);
+    }
+    if (this.commanderReconnectWindow) {
+      clearTimeout(this.commanderReconnectWindow.timeoutId);
+      this.commanderReconnectWindow = undefined;
     }
     this.reconnectGraceWindows.clear();
     this.reconnectTokenByLeviathanId.clear();

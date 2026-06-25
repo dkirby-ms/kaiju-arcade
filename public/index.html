@@ -67,7 +67,6 @@
       }
 
       input,
-      select,
       button {
         width: 100%;
         border-radius: 10px;
@@ -76,8 +75,7 @@
         font-size: 1rem;
       }
 
-      input,
-      select {
+      input {
         color: var(--ink);
         background: rgba(8, 19, 27, 0.72);
       }
@@ -103,17 +101,11 @@
   <body>
     <main class="entry-card">
       <h1>Kaiju Arcade</h1>
-      <p class="subtitle">Select your role and pilot identity before entering matchmaking.</p>
+      <p class="subtitle">Enter your pilot identity before entering matchmaking.</p>
 
       <form id="entryForm" novalidate>
         <label for="playerName">Player Name</label>
         <input id="playerName" name="playerName" type="text" maxlength="24" autocomplete="nickname" />
-
-        <label for="playerRole">Role</label>
-        <select id="playerRole" name="playerRole">
-          <option value="commander">Commander</option>
-          <option value="kaiju">Kaiju</option>
-        </select>
 
         <p id="entryError" class="error" role="alert" aria-live="polite"></p>
         <button type="submit">Enter Lobby</button>
@@ -125,18 +117,12 @@
       (() => {
         const formEl = document.getElementById("entryForm");
         const playerNameEl = document.getElementById("playerName");
-        const playerRoleEl = document.getElementById("playerRole");
         const entryErrorEl = document.getElementById("entryError");
 
         const existingName = window.KaijuSession.getPlayerName();
-        const existingRole = window.KaijuSession.getRole();
 
         if (existingName) {
           playerNameEl.value = existingName;
-        }
-
-        if (existingRole) {
-          playerRoleEl.value = existingRole;
         }
 
         formEl.addEventListener("submit", (event) => {
@@ -146,14 +132,9 @@
 
           try {
             const playerName = window.KaijuSession.setPlayerName(playerNameEl.value);
-            const role = window.KaijuSession.setRole(playerRoleEl.value);
 
             if (!playerName) {
               throw new Error("Player name is required.");
-            }
-
-            if (!role) {
-              throw new Error("Role is required.");
             }
 
             window.location.assign("/lobby.html");

@@ -25,6 +25,20 @@ export interface CommanderDispatchMessage {
   targetId: string;
 }
 
+export interface MatchRoleClaimMessage {
+  type: "match.role.claim";
+  role: "COMMANDER" | "KAIJU";
+}
+
+export interface MatchRoleReleaseMessage {
+  type: "match.role.release";
+}
+
+export interface MatchReadyMessage {
+  type: "match.ready";
+  ready: boolean;
+}
+
 export interface KaijuMoveMessage {
   type: "kaiju.move";
   heading?: number; // 0–360 degrees fallback
@@ -48,6 +62,9 @@ export interface KaijuContinueMessage {
 export type ClientMessage =
   | CommanderSelectMessage
   | CommanderDispatchMessage
+  | MatchRoleClaimMessage
+  | MatchRoleReleaseMessage
+  | MatchReadyMessage
   | KaijuMoveMessage
   | KaijuAttackMessage
   | KaijuAbilityMessage
@@ -179,11 +196,44 @@ export function isClientMessage(msg: unknown): msg is ClientMessage {
   return [
     "commander.select",
     "commander.dispatch",
+    "match.role.claim",
+    "match.role.release",
+    "match.ready",
     "kaiju.move",
     "kaiju.attack",
     "kaiju.ability",
     "kaiju.continue",
   ].includes(type);
+}
+
+export function validateMatchRoleClaim(msg: unknown): msg is MatchRoleClaimMessage {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+
+  const m = msg as Record<string, unknown>;
+  return (
+    m.type === "match.role.claim" &&
+    (m.role === "COMMANDER" || m.role === "KAIJU")
+  );
+}
+
+export function validateMatchRoleRelease(msg: unknown): msg is MatchRoleReleaseMessage {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+
+  const m = msg as Record<string, unknown>;
+  return m.type === "match.role.release";
+}
+
+export function validateMatchReady(msg: unknown): msg is MatchReadyMessage {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+
+  const m = msg as Record<string, unknown>;
+  return m.type === "match.ready" && typeof m.ready === "boolean";
 }
 
 export function validateCommanderSelect(msg: unknown): msg is CommanderSelectMessage {

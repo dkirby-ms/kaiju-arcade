@@ -124,6 +124,7 @@ app.get("/api/matches", async (_req, res) => {
       clients: room.clients,
       maxClients: room.maxClients,
       locked: room.locked,
+      metadata: (room as { metadata?: Record<string, unknown> }).metadata || {},
     }));
 
     res.json({ matches, total: matches.length });
@@ -162,6 +163,43 @@ app.post("/api/matches/:roomId/kaiju-join", async (req, res) => {
         optionKey: "reconnectToken",
       },
       message: "Kaiju seat reserved. Join with consumeSeatReservation.",
+    });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// REST API: Reserve seat for a specific room without committing to a role.
+app.post("/api/matches/:roomId/join", async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    if (!roomId) {
+      res.status(400).json({ error: "roomId is required" });
+      return;
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const options: Record<string, unknown> = {
+      ...(typeof body.playerName === "string" ? { playerName: body.playerName } : {}),
+      ...(typeof body.reconnectToken === "string" ? { reconnectToken: body.reconnectToken } : {}),
+    };
+
+    const reservation = await matchMaker.joinById(roomId, options);
+
+    res.json({
+      roomName: "match",
+      sessionId: reservation.sessionId,
+      roomId: reservation.roomId,
+      processId: reservation.processId,
+      publicAddress: reservation.publicAddress,
+      wsEndpoint: `ws://${hostname}:${portNum}`,
+      reconnect: {
+        enabled: true,
+        tokenRequired: true,
+        graceWindowMs: 30_000,
+        optionKey: "reconnectToken",
+      },
+      message: "Seat reserved. Join with consumeSeatReservation.",
     });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });

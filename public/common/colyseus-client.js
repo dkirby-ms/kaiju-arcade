@@ -1,12 +1,15 @@
 (function attachColyseusClient(global) {
   const RECONNECT_ROOM_NAME = "match";
+  const REST_LOBBY_POLL_MS = 2000;
 
   function getColyseusNamespace() {
-    if (!global.colyseus || !global.colyseus.Client) {
+    const namespace = global.colyseus || global.Colyseus;
+
+    if (!namespace || !namespace.Client) {
       throw new Error("Colyseus client library is not loaded.");
     }
 
-    return global.colyseus;
+    return namespace;
   }
 
   function getWsEndpoint() {
@@ -19,12 +22,194 @@
     return new Colyseus.Client(getWsEndpoint());
   }
 
+  function normalizeErrorMessage(error) {
+    if (!error) {
+      return "";
+    }
+
+    if (error instanceof Error) {
+      return error.message || "";
+    }
+
+    if (typeof error === "string") {
+      return error;
+    }
+
+    return String(error?.message || "");
+  }
+
+  function shouldUseRestFallback(error) {
+    const message = normalizeErrorMessage(error).toLowerCase();
+    return message.includes("/matchmake/") || message.includes("404") || message.includes("not found");
+  }
+
+  async function postJson(path, payload) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload || {}),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Request failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  function toSeatReservation(reservation) {
+    if (!reservation || !reservation.sessionId || !reservation.roomId) {
+      throw new Error("Invalid seat reservation response from server.");
+    }
+
+    return {
+      sessionId: reservation.sessionId,
+      room: {
+        name: reservation.roomName || RECONNECT_ROOM_NAME,
+        roomId: reservation.roomId,
+        processId: reservation.processId,
+        publicAddress: reservation.publicAddress,
+      },
+    };
+  }
+
+  async function consumeSeatReservation(client, reservation) {
+    return client.consumeSeatReservation(toSeatReservation(reservation));
+  }
+
+  async function createMatchReservationViaRest(options) {
+    const reservation = await postJson("/api/matches", options || {});
+    return reservation;
+  }
+
+  async function createMatchViaRest(client, options) {
+    const reservation = await createMatchReservationViaRest(options);
+    return consumeSeatReservation(client, reservation);
+  }
+
+  async function joinMatchReservationViaRest(roomId, options) {
+    const safeRoomId = encodeURIComponent(String(roomId || "").trim());
+    const payload = options || {};
+
+    try {
+      return await postJson(`/api/matches/${safeRoomId}/join`, payload);
+    } catch (error) {
+      const role = String(payload?.role || payload?.playerRole || "").toLowerCase();
+      if (role !== "kaiju") {
+        throw error;
+      }
+
+      return postJson(`/api/matches/${safeRoomId}/kaiju-join`, payload);
+    }
+  }
+
+  async function joinMatchViaRest(client, roomId, options) {
+    const reservation = await joinMatchReservationViaRest(roomId, options);
+    return consumeSeatReservation(client, reservation);
+  }
+
+  function createRestLobbyRoom() {
+    const handlersByType = new Map();
+    let pollTimer = 0;
+    let disposed = false;
+    let roomsById = new Map();
+
+    function registerHandler(type, handler) {
+      if (!handlersByType.has(type)) {
+        handlersByType.set(type, []);
+      }
+
+      handlersByType.get(type).push(handler);
+    }
+
+    function emit(type, payload) {
+      const handlers = handlersByType.get(type) || [];
+      handlers.forEach((handler) => {
+        if (typeof handler === "function") {
+          handler(payload);
+        }
+      });
+    }
+
+    async function poll() {
+      if (disposed) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/matches", { method: "GET" });
+        if (!response.ok) {
+          throw new Error(`Failed to load matches: ${response.status}`);
+        }
+
+        const payload = await response.json();
+        const nextRooms = new Map();
+
+        (Array.isArray(payload?.matches) ? payload.matches : []).forEach((room) => {
+          const normalized = normalizeLobbyRoom(room?.roomId, room);
+          if (normalized.roomId) {
+            nextRooms.set(normalized.roomId, normalized);
+          }
+        });
+
+        emit("rooms", Array.from(nextRooms.values()));
+
+        nextRooms.forEach((room, roomId) => {
+          const previous = roomsById.get(roomId);
+          if (!previous || JSON.stringify(previous) !== JSON.stringify(room)) {
+            emit("+", [roomId, room]);
+          }
+        });
+
+        roomsById.forEach((_room, roomId) => {
+          if (!nextRooms.has(roomId)) {
+            emit("-", roomId);
+          }
+        });
+
+        roomsById = nextRooms;
+      } finally {
+        if (!disposed) {
+          pollTimer = global.setTimeout(poll, REST_LOBBY_POLL_MS);
+        }
+      }
+    }
+
+    poll();
+
+    return {
+      onMessage(type, handler) {
+        registerHandler(type, handler);
+      },
+      leave() {
+        disposed = true;
+        if (pollTimer) {
+          global.clearTimeout(pollTimer);
+        }
+        return Promise.resolve();
+      },
+    };
+  }
+
   async function joinLobby(client, options) {
-    return client.joinOrCreate("lobby", options || {});
+    // The current server setup exposes /api/matches for lobby discovery.
+    // Avoid calling /matchmake/joinOrCreate/lobby first to prevent noisy 404s in browser consoles.
+    return createRestLobbyRoom();
   }
 
   async function createMatch(client, options) {
-    return client.create(RECONNECT_ROOM_NAME, options || {});
+    try {
+      return await client.create(RECONNECT_ROOM_NAME, options || {});
+    } catch (error) {
+      if (!shouldUseRestFallback(error)) {
+        throw error;
+      }
+
+      return createMatchViaRest(client, options || {});
+    }
   }
 
   async function joinMatchById(client, roomId, options) {
@@ -32,7 +217,7 @@
       throw new Error("roomId is required to join a match.");
     }
 
-    return client.joinById(roomId, options || {});
+    return joinMatchViaRest(client, roomId, options || {});
   }
 
   function normalizeLobbyRoom(roomId, roomData) {
@@ -114,9 +299,13 @@
   global.KaijuColyseusClient = {
     createClient,
     getWsEndpoint,
+    consumeSeatReservation,
+    createMatchReservationViaRest,
+    joinMatchReservationViaRest,
     joinLobby,
     createMatch,
     joinMatchById,
+    consumeSeatReservation,
     bindLobbyRoomListHandlers,
   };
 })(window);

@@ -27,13 +27,8 @@
         <input id="pilotName" type="text" maxlength="24" value="Kaiju Pilot" />
 
         <label for="roomId">Room</label>
-        <select id="roomId"></select>
-        <p class="session-guidance">Session recovery is handled automatically in this browser.</p>
-
-        <div class="session-actions">
-          <button id="refreshMatchesButton" class="secondary">Refresh Matches</button>
-          <button id="joinButton" class="primary">Join Match</button>
-        </div>
+        <input id="roomId" type="text" readonly value="Awaiting active match context" />
+        <p class="session-guidance">Active match sessions reconnect automatically in this browser.</p>
 
         <div id="lobbyPhasePanel">
           <p id="lobbyPhaseStatus" class="status">Awaiting lobby phase...</p>

@@ -1,6 +1,7 @@
 import request from "supertest";
 import fs from "fs";
 import path from "path";
+import vm from "vm";
 
 const mockDefine = jest.fn();
 const mockEnableRealtimeListing = jest.fn();
@@ -210,6 +211,30 @@ describe("API /api/matches", () => {
     expect(response.text).toContain("/common/colyseus-client.js");
   });
 
+  it("serves shared pre-match room page", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/match-room.html");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("Shared Match Room");
+    expect(response.text).toContain("id=\"reservationState\"");
+    expect(response.text).toContain("id=\"participantList\"");
+    expect(response.text).toContain("/common/match-room-app.js");
+    expect(response.text).toContain("/common/session-manager.js");
+  });
+
+  it("serves shared pre-match room controller", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/common/match-room-app.js");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("attachMatchRoomApp");
+    expect(response.text).toContain("match.role.claim");
+    expect(response.text).toContain("match.start");
+  });
+
   it("serves shared session manager helper", async () => {
     const { app } = await import("./index");
 
@@ -226,6 +251,93 @@ describe("API /api/matches", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("global.KaijuColyseusClient");
+  });
+
+  it("serves lobby slot controls helper", async () => {
+    const { app } = await import("./index");
+
+    const response = await request(app).get("/common/lobby-slot-controls.js");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("deriveSlotButtonState");
+  });
+
+  it("computes slot button states from lobby metadata", () => {
+    const helperPath = path.resolve(__dirname, "../public/common/lobby-slot-controls.js");
+    const helperSource = fs.readFileSync(helperPath, "utf8");
+    const context = {
+      window: {},
+    } as {
+      window: {
+        KaijuLobbySlots?: {
+          deriveSlotButtonState?: (room: { metadata?: { commanderTaken?: boolean; kaijuOpenSlots?: number } }, isBusy: boolean) => {
+            commanderAvailable: boolean;
+            kaijuAvailable: boolean;
+            kaijuOpenSlots: number;
+            joinCommanderDisabled: boolean;
+            joinKaijuDisabled: boolean;
+          };
+        };
+      };
+    };
+
+    vm.runInNewContext(helperSource, context);
+
+    const deriveSlotButtonState = context.window.KaijuLobbySlots?.deriveSlotButtonState;
+    expect(typeof deriveSlotButtonState).toBe("function");
+
+    const openSlots = deriveSlotButtonState?.(
+      {
+        metadata: {
+          commanderTaken: false,
+          kaijuOpenSlots: 2,
+        },
+      },
+      false
+    );
+    expect(openSlots).toEqual({
+      commanderAvailable: true,
+      kaijuOpenSlots: 2,
+      kaijuAvailable: true,
+      joinCommanderDisabled: false,
+      joinKaijuDisabled: false,
+    });
+
+    const noCommanderSlot = deriveSlotButtonState?.(
+      {
+        metadata: {
+          commanderTaken: true,
+          kaijuOpenSlots: 1,
+        },
+      },
+      false
+    );
+    expect(noCommanderSlot?.joinCommanderDisabled).toBe(true);
+    expect(noCommanderSlot?.joinKaijuDisabled).toBe(false);
+
+    const noKaijuSlots = deriveSlotButtonState?.(
+      {
+        metadata: {
+          commanderTaken: false,
+          kaijuOpenSlots: 0,
+        },
+      },
+      false
+    );
+    expect(noKaijuSlots?.joinCommanderDisabled).toBe(false);
+    expect(noKaijuSlots?.joinKaijuDisabled).toBe(true);
+
+    const busyState = deriveSlotButtonState?.(
+      {
+        metadata: {
+          commanderTaken: false,
+          kaijuOpenSlots: 3,
+        },
+      },
+      true
+    );
+    expect(busyState?.joinCommanderDisabled).toBe(true);
+    expect(busyState?.joinKaijuDisabled).toBe(true);
   });
 
   it("wires continue FX and spectator map handlers in kaiju client script", () => {
@@ -265,6 +377,12 @@ describe("API /api/matches", () => {
         clients: 2,
         maxClients: 5,
         locked: false,
+        metadata: {
+          state: "LOBBY",
+          cityName: "Neo Tokyo",
+          commanderTaken: true,
+          kaijuOpenSlots: 3,
+        },
       },
     ]);
 
@@ -280,6 +398,12 @@ describe("API /api/matches", () => {
       clients: 2,
       maxClients: 5,
       locked: false,
+      metadata: {
+        state: "LOBBY",
+        cityName: "Neo Tokyo",
+        commanderTaken: true,
+        kaijuOpenSlots: 3,
+      },
     });
     expect(mockQuery).toHaveBeenCalledWith({
       name: "match",
@@ -323,6 +447,69 @@ describe("API /api/matches", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toBe("join failed");
+  });
+
+  it("reserves a seat via generic join endpoint without role selection", async () => {
+    mockJoinById.mockResolvedValue({
+      sessionId: "sess-g-1",
+      roomId: "room-2",
+      processId: "proc-2",
+      publicAddress: "localhost:3000",
+    });
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches/room-2/join")
+      .send({ playerName: "Commander", reconnectToken: "reco-2" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.roomName).toBe("match");
+    expect(response.body.roomId).toBe("room-2");
+    expect(response.body.sessionId).toBe("sess-g-1");
+    expect(mockJoinById).toHaveBeenCalledWith("room-2", {
+      playerName: "Commander",
+      reconnectToken: "reco-2",
+    });
+  });
+
+  it("ignores legacy role-bearing payload fields on generic join endpoint", async () => {
+    mockJoinById.mockResolvedValue({
+      sessionId: "sess-g-2",
+      roomId: "room-3",
+      processId: "proc-3",
+      publicAddress: "localhost:3000",
+    });
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches/room-3/join")
+      .send({
+        playerName: "Legacy Player",
+        role: "commander",
+        playerRole: "kaiju",
+        reconnectToken: "reco-3",
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockJoinById).toHaveBeenCalledWith("room-3", {
+      playerName: "Legacy Player",
+      reconnectToken: "reco-3",
+    });
+  });
+
+  it("returns 400 when generic join reservation fails", async () => {
+    mockJoinById.mockRejectedValue(new Error("generic join failed"));
+
+    const { app } = await import("./index");
+
+    const response = await request(app)
+      .post("/api/matches/room-2/join")
+      .send({ playerName: "Commander", role: "commander" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("generic join failed");
   });
 
   it("returns 500 when listing fails", async () => {

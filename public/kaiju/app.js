@@ -96,8 +96,6 @@
 
   const pilotNameEl = document.getElementById("pilotName");
   const roomIdEl = document.getElementById("roomId");
-  const refreshMatchesButtonEl = document.getElementById("refreshMatchesButton");
-  const joinButtonEl = document.getElementById("joinButton");
   const lobbyPhasePanelEl = document.getElementById("lobbyPhasePanel");
   const lobbyPhaseStatusEl = document.getElementById("lobbyPhaseStatus");
   const connectionStateEl = document.getElementById("connectionState");
@@ -213,17 +211,61 @@
     }
 
     window.KaijuSession.setCurrentMatchId(room.roomId || room.id || "");
-    if (room.reconnectionToken) {
-      window.KaijuSession.setReconnectionToken(room.reconnectionToken);
+    const reconnectToken = room.reconnectionToken || window.KaijuSession.getReconnectionToken();
+    if (reconnectToken) {
+      window.KaijuSession.setReconnectionToken(reconnectToken);
+    }
+    if (typeof window.KaijuSession.setActiveMatchSession === "function") {
+      window.KaijuSession.setActiveMatchSession({
+        roomId: room.roomId || room.id || "",
+        roomName: "match",
+        role: "kaiju",
+        playerName: (pilotNameEl.value || "Kaiju Pilot").trim(),
+        reconnectToken,
+        claimedRole: "KAIJU",
+        activatedAt: Date.now(),
+      });
+    }
+  }
+
+  function clearPendingReservation() {
+    if (window.KaijuSession && typeof window.KaijuSession.clearPendingSeatReservation === "function") {
+      window.KaijuSession.clearPendingSeatReservation();
     }
   }
 
   function routeToLobby(clearMatchSession) {
     if (window.KaijuSession && clearMatchSession) {
+      if (typeof window.KaijuSession.clearActiveMatchSession === "function") {
+        window.KaijuSession.clearActiveMatchSession();
+      }
       window.KaijuSession.clearMatchSession();
     }
 
     window.location.assign("/lobby.html");
+  }
+
+  function routeUpstream(clearMatchSession) {
+    const activeMatchSession =
+      window.KaijuSession && typeof window.KaijuSession.getActiveMatchSession === "function"
+        ? window.KaijuSession.getActiveMatchSession()
+        : null;
+    const pendingReservation =
+      window.KaijuSession && typeof window.KaijuSession.getPendingSeatReservation === "function"
+        ? window.KaijuSession.getPendingSeatReservation()
+        : null;
+    const currentMatchId = window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "";
+
+    if (clearMatchSession && window.KaijuSession) {
+      if (typeof window.KaijuSession.clearActiveMatchSession === "function") {
+        window.KaijuSession.clearActiveMatchSession();
+      }
+      window.KaijuSession.clearMatchSession();
+    }
+
+    const hasPrematchContext =
+      Boolean(pendingReservation?.roomId) || (Boolean(currentMatchId) && !activeMatchSession?.reconnectToken);
+    window.location.assign(hasPrematchContext ? "/match-room.html" : "/lobby.html");
   }
 
   function updatePhaseUi() {
@@ -1056,53 +1098,7 @@
     uiTickHandle = window.requestAnimationFrame(uiTick);
   }
 
-  async function refreshMatches() {
-    const response = await fetch("/api/matches");
-    if (!response.ok) {
-      throw new Error("Failed to list matches");
-    }
-
-    const payload = await response.json();
-    roomIdEl.innerHTML = "";
-
-    payload.matches.forEach((match) => {
-      const option = document.createElement("option");
-      option.value = match.roomId;
-      option.textContent = `${match.roomId} (${match.clients}/${match.maxClients})`;
-      roomIdEl.appendChild(option);
-    });
-
-    if (payload.matches.length === 0) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "No active matches";
-      roomIdEl.appendChild(option);
-    }
-  }
-
-  async function joinMatch() {
-    const selectedRoomId = roomIdEl.value;
-    if (!selectedRoomId) {
-      throw new Error("Select a room first");
-    }
-
-    updateConnectionState("CONNECTING", "alert");
-
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const endpoint = `${wsProtocol}//${window.location.host}`;
-    const client = new window.Colyseus.Client(endpoint);
-
-    const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
-    const reconnectToken =
-      (window.KaijuSession && window.KaijuSession.getReconnectionToken()) || readStoredReconnectToken();
-
-    // Join the specific room directly using Colyseus
-    const room = await client.join("match", selectedRoomId, {
-      playerName: playerName,
-      playerRole: "kaiju",
-      ...(reconnectToken ? { reconnectToken } : {}),
-    });
-
+  function bindRoom(room) {
     state.room = room;
     persistRoomSession(room);
     state.previousHp = 0;
@@ -1190,9 +1186,43 @@
       appendFeed("Reconnect token issued", "nominal", Date.now());
     });
 
+    room.onLeave(() => {
+      updateConnectionState("OFFLINE", "critical");
+    });
+
     state.controlledLeviathan = findControlledLeviathan();
     updatePhaseUi();
     updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
+  }
+
+  async function reconnectActiveMatch() {
+    const selectedRoomId = roomIdEl.value;
+    if (!selectedRoomId) {
+      routeUpstream(true);
+      return;
+    }
+
+    updateConnectionState("CONNECTING", "alert");
+
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const endpoint = `${wsProtocol}//${window.location.host}`;
+    const client = new window.Colyseus.Client(endpoint);
+
+    const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
+    const reconnectToken =
+      (window.KaijuSession && window.KaijuSession.getReconnectionToken()) || readStoredReconnectToken();
+
+    if (!reconnectToken) {
+      routeUpstream(false);
+      return;
+    }
+
+    const room = await client.join("match", selectedRoomId, {
+      playerName: playerName,
+      playerRole: "kaiju",
+      reconnectToken,
+    });
+    bindRoom(room);
   }
 
   function flushQueuedMove() {
@@ -1549,29 +1579,6 @@
 
     document.addEventListener("pointerdown", unlockAudio, { once: true });
 
-    refreshMatchesButtonEl.addEventListener("click", async () => {
-      refreshMatchesButtonEl.disabled = true;
-      try {
-        await refreshMatches();
-      } catch (error) {
-        appendFeed(`MATCH LIST ERROR: ${formatError(error)}`, "critical", Date.now());
-      } finally {
-        refreshMatchesButtonEl.disabled = false;
-      }
-    });
-
-    joinButtonEl.addEventListener("click", async () => {
-      joinButtonEl.disabled = true;
-      try {
-        await joinMatch();
-      } catch (error) {
-        updateConnectionState("OFFLINE", "critical");
-        appendFeed(`CONNECT ERROR: ${formatError(error)}`, "critical", Date.now());
-      } finally {
-        joinButtonEl.disabled = false;
-      }
-    });
-
     bindDirectionalButton(moveUpButtonEl, "up");
     bindDirectionalButton(moveLeftButtonEl, "left");
     bindDirectionalButton(moveDownButtonEl, "down");
@@ -1625,25 +1632,37 @@
       pilotNameEl.value = entrySession.playerName;
     }
 
-    const currentMatchId = window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "";
-    const reconnectToken = window.KaijuSession
-      ? window.KaijuSession.getReconnectionToken()
-      : readStoredReconnectToken();
+    const activeMatchSession =
+      window.KaijuSession && typeof window.KaijuSession.getActiveMatchSession === "function"
+        ? window.KaijuSession.getActiveMatchSession()
+        : null;
+
+    if (activeMatchSession?.playerName) {
+      pilotNameEl.value = activeMatchSession.playerName;
+    }
+
+    const currentMatchId =
+      (window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "") || activeMatchSession?.roomId || "";
+    const reconnectToken =
+      (window.KaijuSession ? window.KaijuSession.getReconnectionToken() : "") ||
+      activeMatchSession?.reconnectToken ||
+      readStoredReconnectToken();
+
+    if (currentMatchId) {
+      roomIdEl.value = currentMatchId;
+    }
 
     if (currentMatchId && reconnectToken) {
-      roomIdEl.value = currentMatchId;
       try {
-        await joinMatch();
+        await reconnectActiveMatch();
       } catch (error) {
         appendFeed(`RECONNECT FAILED: ${formatError(error)}`, "critical", Date.now());
-        routeToLobby(true);
+        routeUpstream(true);
         return;
       }
-    } else if (currentMatchId) {
-      roomIdEl.value = currentMatchId;
-      await refreshMatches();
     } else {
-      await refreshMatches();
+      routeUpstream(!currentMatchId);
+      return;
     }
 
     updatePhaseUi();

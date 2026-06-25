@@ -27,6 +27,35 @@ import { MatchRoom } from "./MatchRoom";
 import { lastStandCities } from "./lastStandCities";
 import { LeviathanSchema } from "../schema/MatchSchema";
 
+function sendClientMessage(
+  room: MatchRoom,
+  sessionId: string,
+  message: { type: string; [key: string]: unknown }
+) {
+  (room as unknown as {
+    handleClientMessage: (client: { sessionId: string }, payload: { type: string; [key: string]: unknown }) => void;
+  }).handleClientMessage({ sessionId }, message);
+}
+
+function claimRole(room: MatchRoom, sessionId: string, role: "COMMANDER" | "KAIJU") {
+  sendClientMessage(room, sessionId, { type: "match.role.claim", role });
+}
+
+function setReady(room: MatchRoom, sessionId: string, ready = true) {
+  sendClientMessage(room, sessionId, { type: "match.ready", ready });
+}
+
+function claimDefaultRoles(room: MatchRoom) {
+  claimRole(room, "session-1", "COMMANDER");
+  claimRole(room, "session-2", "KAIJU");
+}
+
+function claimAndReadyDefaultRoles(room: MatchRoom) {
+  claimDefaultRoles(room);
+  setReady(room, "session-1", true);
+  setReady(room, "session-2", true);
+}
+
 describe("MatchRoom role assignment", () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -37,7 +66,7 @@ describe("MatchRoom role assignment", () => {
     jest.useRealTimers();
   });
 
-  it("assigns first join as COMMANDER and second as KAIJU", () => {
+  it("keeps joins unassigned until players claim roles and ready up", () => {
     const room = new MatchRoom();
 
     room.onCreate({ cityName: "Neo Tokyo" });
@@ -47,20 +76,37 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Commander One" }
     );
 
-    expect(room.state.commander.playerId).toBe("session-1");
-    expect(room.state.commander.playerName).toBe("Commander One");
+    expect(room.state.commander.playerId).toBe("");
+    expect(room.state.commander.playerName).toBe("");
     expect(room.state.leviathans.length).toBe(4);
     expect(room.state.leviathans.every((leviathan: LeviathanSchema) => leviathan.isAI)).toBe(true);
+    expect(room.state.participants[0]?.claimedRole).toBe("");
 
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
 
+    expect(room.state.metadata.state).toBe("LOBBY");
+    expect(room.state.leviathans.every((leviathan: LeviathanSchema) => leviathan.isAI)).toBe(true);
+
+    claimDefaultRoles(room);
+
+    expect(room.state.commander.playerId).toBe("session-1");
+    expect(room.state.commander.playerName).toBe("Commander One");
     expect(room.state.leviathans.length).toBe(4);
     expect(room.state.leviathans.some((leviathan: LeviathanSchema) => leviathan.playerId === "session-2")).toBe(true);
     expect(room.state.leviathans.filter((leviathan: LeviathanSchema) => leviathan.isAI).length).toBe(3);
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     expect(room.state.metadata.state).toBe("LOBBY");
+
+    claimAndReadyDefaultRoles(room);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -92,20 +138,20 @@ describe("MatchRoom role assignment", () => {
 
     room.onJoin(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
-      { playerName: "Commander One" }
+      { playerName: "Commander One", playerRole: "COMMANDER" }
     );
 
     for (let i = 0; i < 4; i++) {
       room.onJoin(
         { id: `client-k-${i + 2}`, sessionId: `session-k-${i + 2}` } as unknown as never,
-        { playerName: `Kaiju ${i + 1}` }
+        { playerName: `Kaiju ${i + 1}`, playerRole: "KAIJU" }
       );
     }
 
     const overflowLeave = jest.fn();
     room.onJoin(
       { id: "client-overflow", sessionId: "session-overflow", leave: overflowLeave } as unknown as never,
-      { playerName: "Kaiju Overflow" }
+      { playerName: "Kaiju Overflow", playerRole: "KAIJU" }
     );
 
     const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
@@ -136,11 +182,11 @@ describe("MatchRoom role assignment", () => {
     room.onCreate({ cityName: "Neo Tokyo" });
     room.onJoin(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
-      { playerName: "Commander One" }
+      { playerName: "Commander One", playerRole: "COMMANDER" }
     );
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
-      { playerName: "Kaiju One" }
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
     );
 
     const kaijuSlot = room.state.leviathans.find(
@@ -172,17 +218,49 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
+  it("allows commander reconnect reclaim during grace window", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+
+    room.onLeave(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      1006
+    );
+
+    const reconnectWindow = (room as unknown as {
+      commanderReconnectWindow?: { reconnectToken: string };
+    }).commanderReconnectWindow;
+
+    expect(reconnectWindow?.reconnectToken).toBeDefined();
+    expect(room.state.commander.playerId).toBe("");
+
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Commander One", reconnectToken: reconnectWindow?.reconnectToken }
+    );
+
+    expect(room.state.commander.playerId).toBe("session-2");
+    expect(room.state.commander.playerName).toBe("Commander One");
+
+    room.onDispose();
+  });
+
   it("does not reclaim grace slot without reconnect token", () => {
     const room = new MatchRoom();
 
     room.onCreate({ cityName: "Neo Tokyo" });
     room.onJoin(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
-      { playerName: "Commander One" }
+      { playerName: "Commander One", playerRole: "COMMANDER" }
     );
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
-      { playerName: "Kaiju One" }
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
     );
 
     const kaijuSlot = room.state.leviathans.find(
@@ -212,11 +290,11 @@ describe("MatchRoom role assignment", () => {
     room.onCreate({ cityName: "Neo Tokyo" });
     room.onJoin(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
-      { playerName: "Commander One" }
+      { playerName: "Commander One", playerRole: "COMMANDER" }
     );
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
-      { playerName: "Kaiju One" }
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
     );
 
     const kaijuSlot = room.state.leviathans.find(
@@ -237,7 +315,7 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
-  it("broadcasts signal feed events for commander and kaiju joins", () => {
+  it("broadcasts signal feed events for commander and kaiju claims", () => {
     const room = new MatchRoom();
     const broadcast = jest.fn();
     (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
@@ -251,6 +329,8 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimDefaultRoles(room);
 
     expect(broadcast).toHaveBeenCalledWith(
       "signal.feed",
@@ -283,6 +363,8 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Commander One" }
     );
 
+    claimRole(room, "session-1", "COMMANDER");
+
     const commanderOnlineSignal = room.state.signalFeed.find(
       (signal: { message: string }) => signal.message === "COMMANDER COMMANDER ONE ONLINE"
     );
@@ -292,6 +374,10 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimRole(room, "session-2", "KAIJU");
+    setReady(room, "session-1", true);
+    setReady(room, "session-2", true);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -319,6 +405,8 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimAndReadyDefaultRoles(room);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -382,6 +470,8 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    claimAndReadyDefaultRoles(room);
+
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
     }).handleCommanderStart(
@@ -443,6 +533,8 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    claimAndReadyDefaultRoles(room);
+
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
     }).handleCommanderStart(
@@ -486,6 +578,8 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimAndReadyDefaultRoles(room);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -537,6 +631,8 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    claimAndReadyDefaultRoles(room);
+
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
     }).handleCommanderStart(
@@ -583,6 +679,8 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimAndReadyDefaultRoles(room);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -642,6 +740,8 @@ describe("MatchRoom role assignment", () => {
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
     );
+
+    claimAndReadyDefaultRoles(room);
 
     (room as unknown as {
       handleCommanderStart: (client: { sessionId: string }) => void;
@@ -790,6 +890,17 @@ describe("MatchRoom role assignment", () => {
       { sessionId: "session-1" },
     );
 
+    expect(room.state.metadata.state).toBe("LOBBY");
+
+    setReady(room, "session-1", true);
+    setReady(room, "session-2", true);
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     expect(room.state.metadata.state).toBe("ACTIVE");
     expect(broadcast).toHaveBeenCalledWith(
       "match.phase",
@@ -827,6 +938,66 @@ describe("MatchRoom role assignment", () => {
         commanderName: "Commander One",
       })
     );
+
+    room.onDispose();
+  });
+
+  it("releases a claimed role and clears readiness state", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    claimAndReadyDefaultRoles(room);
+    sendClientMessage(room, "session-2", { type: "match.role.release" });
+
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    const releasedParticipant = room.state.participants.find(
+      (participant: { sessionId: string; claimedRole: string; ready: boolean }) => participant.sessionId === "session-2"
+    );
+
+    expect(kaiju).toBeUndefined();
+    expect(releasedParticipant?.claimedRole).toBe("");
+    expect(releasedParticipant?.ready).toBe(false);
+
+    room.onDispose();
+  });
+
+  it("rejects match start until all claimed players are ready", () => {
+    const room = new MatchRoom();
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One" }
+    );
+
+    claimDefaultRoles(room);
+    setReady(room, "session-1", true);
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
+    expect(room.state.metadata.state).toBe("LOBBY");
+    expect(
+      room.state.signalFeed.some(
+        (signal: { message: string }) => signal.message === "MATCH START REJECTED - ALL PLAYERS MUST BE READY"
+      )
+    ).toBe(true);
 
     room.onDispose();
   });

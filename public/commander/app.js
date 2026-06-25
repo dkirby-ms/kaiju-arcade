@@ -10,8 +10,6 @@
   };
 
   const playerNameEl = document.getElementById("playerName");
-  const cityNameEl = document.getElementById("cityName");
-  const createJoinButtonEl = document.getElementById("createJoinButton");
   const startMatchButtonEl = document.getElementById("startMatchButton");
   const lobbyPhasePanelEl = document.getElementById("lobbyPhasePanel");
   const lobbyPhaseStatusEl = document.getElementById("lobbyPhaseStatus");
@@ -399,15 +397,53 @@
     }
 
     window.KaijuSession.setCurrentMatchId(room.roomId || room.id || "");
-    window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+    const reconnectToken = room.reconnectionToken || window.KaijuSession.getReconnectionToken();
+    window.KaijuSession.setReconnectionToken(reconnectToken || "");
+    if (typeof window.KaijuSession.setActiveMatchSession === "function") {
+      window.KaijuSession.setActiveMatchSession({
+        roomId: room.roomId || room.id || "",
+        roomName: "match",
+        role: "commander",
+        playerName: (playerNameEl.value || "Commander").trim(),
+        reconnectToken,
+        claimedRole: "COMMANDER",
+        activatedAt: Date.now(),
+      });
+    }
   }
 
   function routeToLobby(clearMatchSession) {
     if (window.KaijuSession && clearMatchSession) {
+      if (typeof window.KaijuSession.clearActiveMatchSession === "function") {
+        window.KaijuSession.clearActiveMatchSession();
+      }
       window.KaijuSession.clearMatchSession();
     }
 
     window.location.assign("/lobby.html");
+  }
+
+  function routeUpstream(clearMatchSession) {
+    const activeMatchSession =
+      window.KaijuSession && typeof window.KaijuSession.getActiveMatchSession === "function"
+        ? window.KaijuSession.getActiveMatchSession()
+        : null;
+    const pendingReservation =
+      window.KaijuSession && typeof window.KaijuSession.getPendingSeatReservation === "function"
+        ? window.KaijuSession.getPendingSeatReservation()
+        : null;
+    const currentMatchId = window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "";
+
+    if (clearMatchSession && window.KaijuSession) {
+      if (typeof window.KaijuSession.clearActiveMatchSession === "function") {
+        window.KaijuSession.clearActiveMatchSession();
+      }
+      window.KaijuSession.clearMatchSession();
+    }
+
+    const hasPrematchContext =
+      Boolean(pendingReservation?.roomId) || (Boolean(currentMatchId) && !activeMatchSession?.reconnectToken);
+    window.location.assign(hasPrematchContext ? "/match-room.html" : "/lobby.html");
   }
 
   async function leaveExistingRoom() {
@@ -564,19 +600,6 @@
     appendLocalFeedMessage(`TARGET LOCK ${leviathanId} (${source})`);
   }
 
-  async function loadCities() {
-    const response = await fetch("/api/matches/options");
-    const payload = await response.json();
-    cityNameEl.innerHTML = "";
-    payload.cityOptions.forEach((city) => {
-      const option = document.createElement("option");
-      option.value = city;
-      option.textContent = city;
-      cityNameEl.appendChild(option);
-    });
-    cityNameEl.value = payload.defaultCity;
-  }
-
   function bindRoomHandlers(room) {
     state.room = room;
     persistRoomSession(room);
@@ -640,57 +663,38 @@
     updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
   }
 
-  async function createAndJoinAsCommander() {
-    updateConnectionState("CONNECTING", "alert");
-
-    const createResponse = await fetch("/api/matches", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cityName: cityNameEl.value,
-        playerName: (playerNameEl.value || "Commander").trim(),
-      }),
-    });
-
-    if (!createResponse.ok) {
-      throw new Error("Failed to create match");
-    }
-
-    const reservation = await createResponse.json();
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // Always prefer same-origin WS endpoint to avoid localhost/public-host mismatches.
-    const endpoint = `${wsProtocol}//${window.location.host}`;
-    const seatReservation = {
-      sessionId: reservation.sessionId,
-      room: {
-        name: reservation.roomName || "match",
-        roomId: reservation.roomId,
-        processId: reservation.processId,
-        publicAddress: reservation.publicAddress || window.location.host,
-      },
-    };
-
-    const client = new window.Colyseus.Client(endpoint);
-    const room = await client.consumeSeatReservation(seatReservation);
-    bindRoomHandlers(room);
-  }
-
   async function reconnectOrJoinFromSession() {
     if (!window.KaijuSession || !window.KaijuColyseusClient) {
-      await createAndJoinAsCommander();
-      return;
+      throw new Error("Session manager unavailable.");
     }
 
     const entrySession = window.KaijuSession.getEntrySession();
+    const activeMatchSession =
+      typeof window.KaijuSession.getActiveMatchSession === "function"
+        ? window.KaijuSession.getActiveMatchSession()
+        : null;
     if (entrySession.playerName) {
       playerNameEl.value = entrySession.playerName;
+    } else if (activeMatchSession?.playerName) {
+      playerNameEl.value = activeMatchSession.playerName;
+    }
+
+    if (activeMatchSession?.roomId) {
+      window.KaijuSession.setCurrentMatchId(activeMatchSession.roomId);
+    }
+    if (activeMatchSession?.reconnectToken) {
+      window.KaijuSession.setReconnectionToken(activeMatchSession.reconnectToken);
     }
 
     const currentMatchId = window.KaijuSession.getCurrentMatchId();
     const reconnectToken = window.KaijuSession.getReconnectionToken();
+    if (!currentMatchId) {
+      routeUpstream(true);
+      return;
+    }
 
-    if (!currentMatchId || !reconnectToken) {
-      await createAndJoinAsCommander();
+    if (!reconnectToken) {
+      routeUpstream(false);
       return;
     }
 
@@ -706,7 +710,7 @@
       bindRoomHandlers(room);
     } catch {
       await leaveExistingRoom();
-      routeToLobby(true);
+      routeUpstream(true);
     }
   }
 
@@ -730,22 +734,6 @@
       targetId,
     });
   }
-
-  createJoinButtonEl.addEventListener("click", async () => {
-    createJoinButtonEl.disabled = true;
-    try {
-      await createAndJoinAsCommander();
-    } catch (error) {
-      updateConnectionState("OFFLINE", "critical");
-      appendSignal({
-        timestamp: Date.now(),
-        message: `CONNECT ERROR: ${formatError(error)}`,
-        severity: "critical",
-      });
-    } finally {
-      createJoinButtonEl.disabled = false;
-    }
-  });
 
   if (startMatchButtonEl) {
     startMatchButtonEl.addEventListener("click", () => {
@@ -810,8 +798,7 @@
   updatePhaseUi();
   reconcileAlertMode();
 
-  loadCities()
-    .then(() => reconnectOrJoinFromSession())
+  reconnectOrJoinFromSession()
     .catch(() => {
       updateConnectionState("OFFLINE", "critical");
     });
