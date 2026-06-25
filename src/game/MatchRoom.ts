@@ -81,6 +81,14 @@ interface JoinRejectionTelemetry {
   timestamp: number;
 }
 
+interface MatchPhasePayload {
+  type: "match.phase";
+  phase: "WAITING" | "LOBBY" | "ACTIVE";
+  matchId: string;
+  timestamp: number;
+  playerCount: number;
+}
+
 interface RejectionCapableClient {
   leave?: (code?: number, reason?: string) => void;
 }
@@ -98,6 +106,13 @@ export class MatchRoom extends Room<MatchSchema> {
   private tickDeltaMs: number = 0;
   private containedEventLedger: Map<string, number> = new Map();
 
+  private updateRoomListingMetadata(metadata: Record<string, unknown>) {
+    const roomWithMetadata = this as unknown as {
+      setMetadata: (value: Record<string, unknown>) => void;
+    };
+    roomWithMetadata.setMetadata(metadata);
+  }
+
   onCreate(options: Record<string, unknown>) {
     console.log("MatchRoom created");
 
@@ -108,6 +123,12 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state.metadata.matchId = uuid();
     this.state.metadata.startedAt = Date.now();
     this.state.metadata.state = "WAITING";
+    this.updateRoomListingMetadata({
+      status: "waiting",
+      playerCount: 0,
+      maxPlayers: this.maxClients,
+      commanderName: "",
+    });
 
     // Initialize city base from options or use default
     this.state.cityBase.id = uuid();
@@ -139,7 +160,13 @@ export class MatchRoom extends Room<MatchSchema> {
     // Set up message handlers
     this.onMessage("*", (client: Client, messageType: string | number, message: unknown) => {
       if (typeof messageType === "string") {
-        this.handleClientMessage(client, { type: messageType, ...(message as Record<string, unknown>) } as ClientMessage);
+        const payload = { type: messageType, ...(message as Record<string, unknown>) };
+        if (messageType === "commander.start") {
+          this.handleCommanderStart(client);
+          return;
+        }
+
+        this.handleClientMessage(client, payload as ClientMessage);
       }
     });
 
@@ -149,25 +176,33 @@ export class MatchRoom extends Room<MatchSchema> {
   onJoin(client: Client, options?: Record<string, unknown>) {
     console.log(`Client ${client.sessionId} joined`);
 
-    // Determine role: first player is COMMANDER, rest are KAIJU
-    const isCommander = this.playerSessions.size === 0;
+    const requestedRole =
+      typeof options?.role === "string"
+        ? options.role.toUpperCase()
+        : typeof options?.playerRole === "string"
+          ? options.playerRole.toUpperCase()
+          : undefined;
+    const hasCommander = this.state.commander.playerId.length > 0;
+    const wantsCommander = requestedRole === "COMMANDER";
+    const assignCommander = wantsCommander ? !hasCommander : !hasCommander;
 
     const playerName = (options?.playerName as string) || `Player_${client.sessionId.slice(0, 6)}`;
 
     const session: PlayerSession = {
       clientId: client.id,
       sessionId: client.sessionId,
-      role: isCommander ? "COMMANDER" : "KAIJU",
+      role: assignCommander ? "COMMANDER" : "KAIJU",
       playerName,
     };
 
-    if (isCommander) {
+    if (assignCommander) {
       // Assign Commander
       this.state.commander.playerId = client.sessionId;
       this.state.commander.playerName = playerName;
       session.role = "COMMANDER";
       console.log(`${playerName} assigned as COMMANDER`);
       this.emitSignal(`COMMANDER ${playerName.toUpperCase()} ONLINE`, "nominal", "SYSTEM");
+      this.refreshLobbyMetadata();
     } else {
       const reconnectToken =
         typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
@@ -190,13 +225,11 @@ export class MatchRoom extends Room<MatchSchema> {
     }
 
     this.playerSessions.set(client.sessionId, session);
+    this.refreshLobbyMetadata();
+    this.tryEnterLobbyPhase();
 
-    // Transition to ACTIVE if we have both commander and at least one kaiju
-    if (
-      this.playerSessions.size >= 2 &&
-      this.state.metadata.state === "WAITING"
-    ) {
-      this.startMatch();
+    if (this.state.metadata.state === "WAITING") {
+      this.broadcastMatchPhase("WAITING");
     }
   }
 
@@ -240,6 +273,7 @@ export class MatchRoom extends Room<MatchSchema> {
       if (this.state.metadata.state === "ACTIVE") {
         this.state.metadata.state = "ENDED";
         this.state.metadata.outcome = "ABORTED";
+        this.refreshLobbyMetadata();
       }
     } else {
       // Kaiju player disconnected - start 30s grace window for reconnection.
@@ -260,6 +294,7 @@ export class MatchRoom extends Room<MatchSchema> {
     }
 
     this.playerSessions.delete(client.sessionId);
+    this.refreshLobbyMetadata();
 
     // If room is empty, it will auto-dispose
     if (this.playerSessions.size === 0) {
@@ -293,7 +328,12 @@ export class MatchRoom extends Room<MatchSchema> {
 
         case "kaiju.move":
           if (validateKaijuMove(message) && session.role === "KAIJU" && session.leviathanId) {
-            this.handleKaijuMove(session.leviathanId, message.heading);
+            this.handleKaijuMove(
+              session.leviathanId,
+              message.heading,
+              message.moveX,
+              message.moveY
+            );
           }
           break;
 
@@ -321,6 +361,36 @@ export class MatchRoom extends Room<MatchSchema> {
     } catch (error) {
       console.error("Error handling client message:", error);
     }
+  }
+
+  private handleCommanderStart(client: Client) {
+    const session = this.playerSessions.get(client.sessionId);
+    if (!session || session.role !== "COMMANDER") {
+      return;
+    }
+
+    if (this.state.metadata.state !== "LOBBY") {
+      this.emitSignal("MATCH START REJECTED - LOBBY PHASE REQUIRED", "alert", "SYSTEM");
+      return;
+    }
+
+    this.startMatch();
+  }
+
+  private tryEnterLobbyPhase() {
+    const hasCommander = this.state.commander.playerId.length > 0;
+    const hasKaiju = this.state.leviathans.some(
+      (leviathan: LeviathanSchema) => !leviathan.isAI && leviathan.playerId.length > 0
+    );
+
+    if (!hasCommander || !hasKaiju || this.state.metadata.state !== "WAITING") {
+      return;
+    }
+
+    this.state.metadata.state = "LOBBY";
+    this.emitSignal("LOBBY READY", "nominal", "SYSTEM");
+    this.refreshLobbyMetadata();
+    this.broadcastMatchPhase("LOBBY");
   }
 
   private handleCommanderSelect(leviathanId: string) {
@@ -376,10 +446,43 @@ export class MatchRoom extends Room<MatchSchema> {
     this.broadcastCommanderStatus(now);
   }
 
-  private handleKaijuMove(leviathanId: string, heading: number) {
+  private handleKaijuMove(
+    leviathanId: string,
+    heading?: number,
+    moveX?: number,
+    moveY?: number
+  ) {
     const leviathan = this.state.getLeviathan(leviathanId);
-    if (leviathan && !leviathan.isSpectator && leviathan.status !== "CONTAINED") {
-      leviathan.heading = heading;
+    if (!leviathan || leviathan.isSpectator || leviathan.status === "CONTAINED") {
+      return;
+    }
+
+    const hasVector =
+      typeof moveX === "number" &&
+      Number.isFinite(moveX) &&
+      typeof moveY === "number" &&
+      Number.isFinite(moveY);
+
+    if (hasVector) {
+      const magnitude = Math.hypot(moveX, moveY);
+      if (magnitude <= 0.0001) {
+        leviathan.moveX = 0;
+        leviathan.moveY = 0;
+        return;
+      }
+
+      leviathan.moveX = moveX / magnitude;
+      leviathan.moveY = moveY / magnitude;
+      leviathan.heading = ((Math.atan2(leviathan.moveY, leviathan.moveX) * 180) / Math.PI + 360) % 360;
+      return;
+    }
+
+    if (typeof heading === "number" && Number.isFinite(heading)) {
+      const normalizedHeading = ((heading % 360) + 360) % 360;
+      const radians = (normalizedHeading * Math.PI) / 180;
+      leviathan.heading = normalizedHeading;
+      leviathan.moveX = Math.cos(radians);
+      leviathan.moveY = Math.sin(radians);
     }
   }
 
@@ -466,6 +569,8 @@ export class MatchRoom extends Room<MatchSchema> {
       leviathan.statusEndTime = 0;
       leviathan.containedAt = 0;
       leviathan.isSpectator = false;
+      leviathan.moveX = 0;
+      leviathan.moveY = 0;
       console.log(`${leviathan.name} continued with ${leviathan.credits} credits remaining`);
       this.emitSignal(
         `KAIJU ${leviathan.name} RESPAWNING - CREDIT USED`,
@@ -495,6 +600,8 @@ export class MatchRoom extends Room<MatchSchema> {
     leviathan.x = 10; // Start at map edge
     leviathan.y = 10 + index * 20;
     leviathan.heading = 180; // Moving toward base (at 50, 50)
+    leviathan.moveX = 0;
+    leviathan.moveY = 0;
     leviathan.speed = 1;
     leviathan.status = "ACTIVE";
     leviathan.isAI = isAI;
@@ -525,6 +632,8 @@ export class MatchRoom extends Room<MatchSchema> {
     slot.name = `${slot.archetype}-${playerName.slice(0, 3).toUpperCase()}`;
     slot.hp = slot.hpMax;
     slot.credits = GAME_CONSTANTS.CREDIT_COUNT;
+    slot.moveX = 0;
+    slot.moveY = 0;
     return slot;
   }
 
@@ -555,6 +664,8 @@ export class MatchRoom extends Room<MatchSchema> {
     leviathan.isAI = false;
     leviathan.playerId = sessionId;
     leviathan.playerName = playerName;
+    leviathan.moveX = 0;
+    leviathan.moveY = 0;
 
     this.emitSignal(
       `KAIJU ${leviathan.name} RECONNECTED - GRACE RECOVERY SUCCESS`,
@@ -649,12 +760,39 @@ export class MatchRoom extends Room<MatchSchema> {
     this.state.metadata.state = "ACTIVE";
     this.state.metadata.startedAt = Date.now();
     this.emitSignal("MATCH START", "nominal", "SYSTEM");
+    this.refreshLobbyMetadata();
+    this.broadcastMatchPhase("ACTIVE");
     this.broadcastMatchStart();
     this.broadcastCommanderStatus(this.state.metadata.startedAt);
 
-    // Start game loop: 5 Hz (200ms per tick)
+    // Start game loop: 20 Hz (50ms per tick)
     this.lastTickTime = Date.now();
     this.tickIntervalId = setInterval(() => this.tick(), GAME_CONSTANTS.TICK_MS);
+  }
+
+  private refreshLobbyMetadata() {
+    this.updateRoomListingMetadata({
+      status: this.state.metadata.state.toLowerCase(),
+      playerCount: this.playerSessions.size,
+      maxPlayers: this.maxClients,
+      commanderName: this.state.commander.playerName,
+    });
+  }
+
+  private broadcastMatchPhase(phase: "WAITING" | "LOBBY" | "ACTIVE") {
+    if (typeof this.broadcast !== "function") {
+      return;
+    }
+
+    const payload: MatchPhasePayload = {
+      type: "match.phase",
+      phase,
+      matchId: this.state.metadata.matchId,
+      timestamp: Date.now(),
+      playerCount: this.playerSessions.size,
+    };
+
+    this.broadcast("match.phase", payload);
   }
 
   private broadcastMatchStart() {

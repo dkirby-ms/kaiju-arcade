@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaiju Arcade Entry</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg-1: #0a1f2d;
+        --bg-2: #123846;
+        --accent-a: #6de4ff;
+        --accent-b: #ffd166;
+        --ink: #f2fbff;
+        --muted: #b6d9e6;
+        --danger: #ff6b6b;
+        --panel: rgba(11, 28, 38, 0.82);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 20% 20%, rgba(109, 228, 255, 0.24), transparent 34%),
+          radial-gradient(circle at 80% 70%, rgba(255, 209, 102, 0.2), transparent 36%),
+          linear-gradient(130deg, var(--bg-1), var(--bg-2));
+        color: var(--ink);
+        display: grid;
+        place-items: center;
+        padding: 16px;
+      }
+
+      .entry-card {
+        width: min(560px, 100%);
+        background: var(--panel);
+        border: 1px solid rgba(109, 228, 255, 0.35);
+        border-radius: 18px;
+        backdrop-filter: blur(10px);
+        padding: 24px;
+        box-shadow: 0 20px 44px rgba(0, 0, 0, 0.4);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.7rem, 4vw, 2.2rem);
+        letter-spacing: 0.06em;
+      }
+
+      .subtitle {
+        margin: 8px 0 20px;
+        color: var(--muted);
+      }
+
+      form {
+        display: grid;
+        gap: 14px;
+      }
+
+      label {
+        font-weight: 700;
+        letter-spacing: 0.03em;
+      }
+
+      input,
+      select,
+      button {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 12px;
+        font-size: 1rem;
+      }
+
+      input,
+      select {
+        color: var(--ink);
+        background: rgba(8, 19, 27, 0.72);
+      }
+
+      button {
+        cursor: pointer;
+        border: none;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #08131b;
+        background: linear-gradient(90deg, var(--accent-a), var(--accent-b));
+      }
+
+      .error {
+        min-height: 1.1em;
+        margin: 0;
+        color: var(--danger);
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="entry-card">
+      <h1>Kaiju Arcade</h1>
+      <p class="subtitle">Select your role and pilot identity before entering matchmaking.</p>
+
+      <form id="entryForm" novalidate>
+        <label for="playerName">Player Name</label>
+        <input id="playerName" name="playerName" type="text" maxlength="24" autocomplete="nickname" />
+
+        <label for="playerRole">Role</label>
+        <select id="playerRole" name="playerRole">
+          <option value="commander">Commander</option>
+          <option value="kaiju">Kaiju</option>
+        </select>
+
+        <p id="entryError" class="error" role="alert" aria-live="polite"></p>
+        <button type="submit">Enter Lobby</button>
+      </form>
+    </main>
+
+    <script src="/common/session-manager.js"></script>
+    <script>
+      (() => {
+        const formEl = document.getElementById("entryForm");
+        const playerNameEl = document.getElementById("playerName");
+        const playerRoleEl = document.getElementById("playerRole");
+        const entryErrorEl = document.getElementById("entryError");
+
+        const existingName = window.KaijuSession.getPlayerName();
+        const existingRole = window.KaijuSession.getRole();
+
+        if (existingName) {
+          playerNameEl.value = existingName;
+        }
+
+        if (existingRole) {
+          playerRoleEl.value = existingRole;
+        }
+
+        formEl.addEventListener("submit", (event) => {
+          event.preventDefault();
+
+          entryErrorEl.textContent = "";
+
+          try {
+            const playerName = window.KaijuSession.setPlayerName(playerNameEl.value);
+            const role = window.KaijuSession.setRole(playerRoleEl.value);
+
+            if (!playerName) {
+              throw new Error("Player name is required.");
+            }
+
+            if (!role) {
+              throw new Error("Role is required.");
+            }
+
+            window.location.assign("/lobby.html");
+          } catch (error) {
+            entryErrorEl.textContent = error instanceof Error ? error.message : "Unable to continue.";
+            playerNameEl.focus();
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

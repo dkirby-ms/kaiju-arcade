@@ -37,6 +37,16 @@ app.use(
   "/kaiju",
   express.static(path.resolve(__dirname, "../public/kaiju"))
 );
+app.use("/common", express.static(path.resolve(__dirname, "../public/common")));
+app.use(express.static(path.resolve(__dirname, "../public")));
+
+app.get("/", (_req, res) => {
+  res.sendFile(path.resolve(__dirname, "../public/index.html"));
+});
+
+app.get("/lobby", (_req, res) => {
+  res.sendFile(path.resolve(__dirname, "../public/lobby.html"));
+});
 
 // Health check endpoint
 app.get("/health", (_req, res) => {
@@ -57,8 +67,8 @@ app.get("/api/matches/options", (_req, res) => {
   });
 });
 
-// Register match room
-gameServer.define("match", MatchRoom);
+// Register match room with realtime listing so LobbyRoom clients can discover updates.
+gameServer.define("match", MatchRoom).enableRealtimeListing();
 
 // REST API: Create new match
 app.post("/api/matches", async (req, res) => {

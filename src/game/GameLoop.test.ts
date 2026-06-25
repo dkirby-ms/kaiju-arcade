@@ -17,6 +17,8 @@ function buildState(): MatchSchema {
   leviathan.x = 10;
   leviathan.y = 10;
   leviathan.heading = 45;
+  leviathan.moveX = Math.SQRT1_2;
+  leviathan.moveY = Math.SQRT1_2;
   leviathan.speed = 1;
   leviathan.status = "ACTIVE";
   leviathan.lastAttackTime = 0;
@@ -46,9 +48,45 @@ describe("GameLoop determinism", () => {
   });
 
   it("validates tick timing with expected tolerance", () => {
-    expect(validateTickTiming(200).isValid).toBe(true);
-    expect(validateTickTiming(180).isValid).toBe(true);
-    expect(validateTickTiming(230).isValid).toBe(false);
+    expect(validateTickTiming(50).isValid).toBe(true);
+    expect(validateTickTiming(35).isValid).toBe(true);
+    expect(validateTickTiming(80).isValid).toBe(false);
+  });
+
+  it("limits heading turn rate to keep movement smooth", () => {
+    const state = buildState();
+    const leviathan = state.leviathans[0];
+
+    leviathan.heading = 0;
+    leviathan.moveX = 0;
+    leviathan.moveY = 1;
+
+    executeTick({ state, deltaMs: 50, tickCount: 1, now: 50 });
+
+    expect(leviathan.heading).toBe(13);
+    expect(leviathan.y).toBeGreaterThan(10);
+  });
+
+  it("applies archetype-specific turn rates", () => {
+    const state = buildState();
+    const leviathan = state.leviathans[0];
+
+    leviathan.archetype = "Sniper";
+    leviathan.heading = 0;
+    leviathan.moveX = 0;
+    leviathan.moveY = 1;
+
+    executeTick({ state, deltaMs: 50, tickCount: 2, now: 100 });
+    const sniperHeading = leviathan.heading;
+
+    leviathan.archetype = "Tank";
+    leviathan.heading = 0;
+    executeTick({ state, deltaMs: 50, tickCount: 3, now: 150 });
+    const tankHeading = leviathan.heading;
+
+    expect(sniperHeading).toBe(23);
+    expect(tankHeading).toBe(11.5);
+    expect(sniperHeading).toBeGreaterThan(tankHeading);
   });
 
   it("resolves pending dispatches when delay elapses", () => {

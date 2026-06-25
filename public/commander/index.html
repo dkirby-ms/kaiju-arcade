@@ -10,101 +10,118 @@
     <script src="https://unpkg.com/colyseus.js@0.16.20/dist/colyseus.js"></script>
   </head>
   <body>
-    <main class="console-shell">
-      <header class="console-header">
+    <main class="hud-shell">
+      <!-- HEADER: Top-left position -->
+      <header class="panel hud-header">
         <h1>COMMANDER CONSOLE</h1>
-        <p class="subline">LIVE MITIGATION CONTROL SURFACE</p>
+        <p class="subline">TACTICAL COMMAND SURFACE</p>
       </header>
 
-      <section class="panel controls-panel">
+      <!-- SESSION PANEL: Top-left below header -->
+      <section class="panel session-panel">
         <h2>SESSION</h2>
-        <div class="field-row">
-          <label for="playerName">Operator</label>
-          <input id="playerName" type="text" value="Commander" maxlength="24" />
+        <label for="playerName">Operator</label>
+        <input id="playerName" type="text" maxlength="24" value="Commander" />
+
+        <label for="cityName">City</label>
+        <select id="cityName"></select>
+
+        <div class="session-actions">
+          <button id="createJoinButton" class="primary">Create Match</button>
         </div>
-        <div class="field-row">
-          <label for="cityName">City</label>
-          <select id="cityName"></select>
+
+        <div id="lobbyPhasePanel">
+          <p id="lobbyPhaseStatus" class="status">Awaiting lobby phase...</p>
+          <button id="startMatchButton" class="primary" type="button">Start Match</button>
+          <ul id="lobbyRoster"></ul>
         </div>
-        <button id="createJoinButton" class="primary">Create Match + Join</button>
+
         <p id="connectionState" class="status">OFFLINE</p>
       </section>
 
-      <section class="panel status-panel">
-        <h2>COMMAND STATUS</h2>
-        <div class="status-toolbar">
-          <button id="alertModeToggle" type="button">ALERT MODE: OFF</button>
-          <strong id="alertModeState">NOMINAL</strong>
-        </div>
-        <div class="status-grid">
-          <div>
-            <span>BASE HP</span>
-            <strong id="cityBaseHp">-</strong>
+      <!-- TACTICAL HUD: Top-center bar with status and feed combined -->
+      <section class="panel tactical-hud" data-active-ui="true">
+        <div class="hud-content">
+          <div class="hud-status-group">
+            <div class="hud-stat">
+              <span class="hud-label">BASE HP</span>
+              <strong id="cityBaseHp">-</strong>
+            </div>
+            <div class="hud-stat">
+              <span class="hud-label">SCORE</span>
+              <strong id="commanderScore">-</strong>
+            </div>
+            <div class="hud-stat">
+              <span class="hud-label">BARRIERS</span>
+              <strong id="activeBarriers">-</strong>
+            </div>
+            <div class="hud-stat">
+              <span class="hud-label">TARGET</span>
+              <strong id="selectedTarget">-</strong>
+            </div>
+            <div class="hud-divider"></div>
+            <div class="hud-feed-inline" id="tacticFeedInline"></div>
           </div>
-          <div>
-            <span>SCORE</span>
-            <strong id="commanderScore">-</strong>
-          </div>
-          <div>
-            <span>BARRIERS</span>
-            <strong id="activeBarriers">-</strong>
-          </div>
-          <div>
-            <span>SELECTED TARGET</span>
-            <strong id="selectedTarget">-</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel map-panel">
-        <h2>COMMAND MAP</h2>
-        <div class="map-canvas-wrapper">
-          <div id="leafletMap"></div>
-          <canvas id="radarOverlay"></canvas>
         </div>
       </section>
 
-      <section class="panel dispatch-panel">
+      <!-- MAP PANEL: Full viewport coverage -->
+      <section class="panel map-panel" data-active-ui="true">
+        <div id="leafletMap"></div>
+        <canvas id="radarOverlay"></canvas>
+      </section>
+
+      <!-- DISPATCH PANEL: Bottom-left overlay with action buttons -->
+      <section class="panel dispatch-panel" data-active-ui="true">
         <h2>DISPATCH</h2>
-        <div class="field-row">
-          <label for="targetId">Target</label>
+        <div class="dispatch-target-row">
+          <label for="targetId">TARGET</label>
           <select id="targetId"></select>
         </div>
         <div class="dispatch-buttons">
-          <button data-asset="Scramble Jets">Scramble Jets</button>
-          <button data-asset="Deploy Mechs">Deploy Mechs</button>
-          <button data-asset="Raise Barrier">Raise Barrier</button>
-          <button data-asset="Evac Sector">Evac Sector</button>
+          <button class="dispatch-btn" data-asset="Scramble Jets" title="Rapid aerial response">
+            <span class="btn-icon">✈</span>
+            <span class="btn-label">SCRAMBLE</span>
+          </button>
+          <button class="dispatch-btn" data-asset="Deploy Mechs" title="Mechanized infantry">
+            <span class="btn-icon">⚙</span>
+            <span class="btn-label">MECHS</span>
+          </button>
+          <button class="dispatch-btn" data-asset="Raise Barrier" title="Defensive containment">
+            <span class="btn-icon">🛡</span>
+            <span class="btn-label">BARRIER</span>
+          </button>
+          <button class="dispatch-btn" data-asset="Evac Sector" title="Civilian protection">
+            <span class="btn-icon">⚠</span>
+            <span class="btn-label">EVAC</span>
+          </button>
         </div>
-        <ul id="assetStatus"></ul>
+        <div class="dispatch-readiness">
+          <ul id="assetStatus"></ul>
+        </div>
       </section>
 
-      <section class="panel feed-panel">
+      <!-- RESULTS PANEL: Bottom-left below dispatch, compact results log -->
+      <section class="panel results-panel" data-active-ui="true">
+        <h2>RESULTS</h2>
+        <ul id="dispatchResults"></ul>
+      </section>
+
+      <!-- SIGNAL FEED: Bottom-right, tall scrollable feed -->
+      <section class="panel signal-feed-panel" data-active-ui="true">
         <h2>SIGNAL FEED</h2>
         <ul id="signalFeed"></ul>
       </section>
 
-      <section class="panel feed-panel">
-        <h2>MATCH TIMELINE</h2>
-        <div class="status-grid compact">
-          <div>
-            <span>ELAPSED</span>
-            <strong id="matchElapsed">00:00</strong>
-          </div>
-          <div>
-            <span>ETA TO BASE</span>
-            <strong id="etaToBase">N/A</strong>
-          </div>
-        </div>
-        <ul id="timelineFeed"></ul>
-      </section>
-
-      <section class="panel feed-panel">
-        <h2>DISPATCH RESULTS</h2>
-        <ul id="dispatchResults"></ul>
-      </section>
+      <!-- ALERT MODE TOGGLE: Top-right corner -->
+      <div class="alert-mode-badge" data-active-ui="true">
+        <button id="alertModeToggle" type="button" title="Toggle alert mode">⚡</button>
+        <strong id="alertModeState">NOMINAL</strong>
+      </div>
     </main>
 
+    <script src="/common/session-manager.js"></script>
+    <script src="/common/colyseus-client.js"></script>
     <script src="/commander/app.js"></script>
   </body>
 </html>

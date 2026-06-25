@@ -37,6 +37,12 @@ export class LeviathanSchema extends Schema {
   heading: number = 0; // Direction (0-360 degrees)
 
   @type("number")
+  moveX: number = 0; // Normalized movement vector X (-1 to 1)
+
+  @type("number")
+  moveY: number = 0; // Normalized movement vector Y (-1 to 1)
+
+  @type("number")
   speed: number = 1; // Movement speed multiplier
 
   @type("string")
@@ -223,7 +229,7 @@ export class MatchMetadataSchema extends Schema {
   now: number = 0; // Current server timestamp (synced each tick)
 
   @type("string")
-  state: string = "WAITING"; // WAITING, ACTIVE, ENDED
+  state: string = "WAITING"; // WAITING, LOBBY, ACTIVE, ENDED
 
   @type("string")
   outcome: string = ""; // KAIJU_VICTORY, COMMANDER_VICTORY, TIME_LIMIT, ABORTED
@@ -451,6 +457,8 @@ export class MatchSchema extends Schema {
         x: leviathan.x,
         y: leviathan.y,
         heading: leviathan.heading,
+        moveX: leviathan.moveX,
+        moveY: leviathan.moveY,
         speed: leviathan.speed,
         status: leviathan.status,
         statusEndTime: leviathan.statusEndTime,
@@ -557,6 +565,8 @@ export class MatchSchema extends Schema {
       leviathan.x = leviathanSnapshot.x;
       leviathan.y = leviathanSnapshot.y;
       leviathan.heading = leviathanSnapshot.heading;
+      leviathan.moveX = leviathanSnapshot.moveX;
+      leviathan.moveY = leviathanSnapshot.moveY;
       leviathan.speed = leviathanSnapshot.speed;
       leviathan.status = leviathanSnapshot.status;
       leviathan.statusEndTime = leviathanSnapshot.statusEndTime;
@@ -686,6 +696,8 @@ export interface LeviathanSnapshot {
   x: number;
   y: number;
   heading: number;
+  moveX: number;
+  moveY: number;
   speed: number;
   status: string;
   statusEndTime: number;
@@ -745,8 +757,8 @@ export interface BarrierSnapshot {
  */
 export const GAME_CONSTANTS = {
   // Tick engine
-  TICK_RATE_HZ: 5, // 5 Hz = 200ms per tick
-  TICK_MS: 200,
+  TICK_RATE_HZ: 20, // 20 Hz = 50ms per tick
+  TICK_MS: 50,
 
   // Combo system
   COMBO_WINDOW_MS: 150, // 150ms window for combo detection
@@ -779,6 +791,16 @@ export const GAME_CONSTANTS = {
   // Match
   DEFAULT_ROUND_TIMER_MS: 600000, // 10 minutes default (0 = no limit)
   CITY_BASE_HP: 500,
+
+  // Movement tuning
+  BASE_MOVE_SPEED_UNITS_PER_MS: 0.1,
+  TURN_RATE_DEGREES_PER_SECOND: {
+    Sniper: 460,
+    Dozer: 260,
+    Berserker: 400,
+    Tank: 230,
+    DEFAULT: 320,
+  },
 
   // Status effects
   SUBMERGED_DURATION_MS: 5000,

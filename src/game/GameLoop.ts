@@ -23,7 +23,7 @@ export interface GameLoopContext {
 
 /**
  * Main tick function - orchestrates all per-frame updates
- * Called at 5 Hz (every 200ms)
+ * Called at 20 Hz (every 50ms)
  */
 export function executeTick(context: GameLoopContext): void {
   // Order matters: positions → attacks → damage → effects → cleanup
@@ -49,18 +49,53 @@ function updateLeviathanPositions(context: GameLoopContext): void {
 
     // Calculate movement distance this tick
     // Assuming speed is a multiplier of base speed (e.g., 1 = normal)
-    const baseSpeed = 0.1; // Units per ms
-    const distance = baseSpeed * leviathan.speed * deltaMs;
+    const distance =
+      GAME_CONSTANTS.BASE_MOVE_SPEED_UNITS_PER_MS * leviathan.speed * deltaMs;
 
-    // Convert heading to radians and calculate new position
-    const radians = (leviathan.heading * Math.PI) / 180;
-    leviathan.x += Math.cos(radians) * distance;
-    leviathan.y += Math.sin(radians) * distance;
+    const movementMagnitude = Math.hypot(leviathan.moveX, leviathan.moveY);
+    if (movementMagnitude <= 0.0001) {
+      continue;
+    }
+
+    // Treat move vector as desired input and rotate toward it at a capped rate.
+    const desiredHeading = normalizeHeading(
+      ((Math.atan2(leviathan.moveY, leviathan.moveX) * 180) / Math.PI + 360) % 360
+    );
+    const currentHeading = normalizeHeading(leviathan.heading);
+    const turnRateDegreesPerSecond =
+      GAME_CONSTANTS.TURN_RATE_DEGREES_PER_SECOND[
+        leviathan.archetype as keyof typeof GAME_CONSTANTS.TURN_RATE_DEGREES_PER_SECOND
+      ] ?? GAME_CONSTANTS.TURN_RATE_DEGREES_PER_SECOND.DEFAULT;
+    const turnLimitThisTick = turnRateDegreesPerSecond * (deltaMs / 1000);
+    const headingDelta = shortestHeadingDelta(currentHeading, desiredHeading);
+    const appliedDelta = clamp(headingDelta, -turnLimitThisTick, turnLimitThisTick);
+
+    leviathan.heading = normalizeHeading(currentHeading + appliedDelta);
+
+    const headingRadians = (leviathan.heading * Math.PI) / 180;
+    const throttle = Math.min(1, movementMagnitude);
+    const unitX = Math.cos(headingRadians);
+    const unitY = Math.sin(headingRadians);
+
+    leviathan.x += unitX * distance * throttle;
+    leviathan.y += unitY * distance * throttle;
 
     // Clamp to map bounds (0-100)
     leviathan.x = Math.max(0, Math.min(100, leviathan.x));
     leviathan.y = Math.max(0, Math.min(100, leviathan.y));
   }
+}
+
+function normalizeHeading(heading: number): number {
+  return ((heading % 360) + 360) % 360;
+}
+
+function shortestHeadingDelta(from: number, to: number): number {
+  return ((to - from + 540) % 360) - 180;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 /**

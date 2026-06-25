@@ -1,7 +1,23 @@
 (() => {
   const CONTINUE_WINDOW_MS = 10_000;
   const ATTACK_COOLDOWN_MS = 2_000;
-  const MOVE_SEND_INTERVAL_MS = 120;
+  const MOVE_SEND_INTERVAL_MS = 70;
+  const MOVE_ACCEL_PER_SECOND = 6.5;
+  const MOVE_DECEL_PER_SECOND = 9.5;
+  const MAP_INTERPOLATION_ALPHA = 0.26;
+  const MAP_PREDICTION_MS = 120;
+  const MAP_CAMERA_FOLLOW_ALPHA = 0.12;
+  const MAP_CAMERA_DEADZONE_UNITS = 8;
+  const INPUT_SETTINGS_STORAGE_KEY = "kaijuInputSettings";
+  const HUD_SETTINGS_STORAGE_KEY = "kaijuHudSettings";
+  const DEFAULT_INPUT_SETTINGS = {
+    deadzone: 0.16,
+    sensitivity: 1,
+  };
+  const DEFAULT_HUD_SETTINGS = {
+    opacity: 0.9,
+  };
+  const KAIJU_ATTACK_RANGE_UNITS = 10;
   const ABILITY_COOLDOWNS_MS = {
     Submerge: 8_000,
     Roar: 7_000,
@@ -23,8 +39,20 @@
     east: -122.0721,
   };
 
+  const MOVE_INPUT_BY_KEY = {
+    KeyW: "up",
+    ArrowUp: "up",
+    KeyS: "down",
+    ArrowDown: "down",
+    KeyA: "left",
+    ArrowLeft: "left",
+    KeyD: "right",
+    ArrowRight: "right",
+  };
+
   const state = {
     room: null,
+    phase: "WAITING",
     controlledLeviathan: null,
     previousHp: 0,
     containedAt: 0,
@@ -33,28 +61,47 @@
       ability: 0,
     },
     lastMoveSentAt: 0,
-    queuedMoveDelta: 0,
+    lastMoveVector: null,
+    smoothedMoveVector: { x: 0, y: 0 },
+    queuedMoveVector: null,
     queuedMoveTimer: 0,
+    lastInputFrameAt: 0,
+    inputSettings: { ...DEFAULT_INPUT_SETTINGS },
+    pressedDirections: {
+      up: false,
+      down: false,
+      left: false,
+      right: false,
+    },
+    directionalButtonsPressed: {
+      up: false,
+      down: false,
+      left: false,
+      right: false,
+    },
     spectatorMode: false,
     gameOverAnnounced: false,
     commanderStatus: null,
     containedEventAt: 0,
     previousCityBaseHp: 0,
     spectatorMapReady: false,
+    smoothedMapCenter: { x: 50, y: 50 },
+    renderLeviathansById: {},
+    lastMapStateAt: 0,
+    mapSampleById: {},
     audioUnlocked: false,
     coinDropAudioSource: null,
+    hudSettings: { ...DEFAULT_HUD_SETTINGS },
   };
 
   const pilotNameEl = document.getElementById("pilotName");
   const roomIdEl = document.getElementById("roomId");
-  const reconnectTokenEl = document.getElementById("reconnectToken");
   const refreshMatchesButtonEl = document.getElementById("refreshMatchesButton");
   const joinButtonEl = document.getElementById("joinButton");
+  const lobbyPhasePanelEl = document.getElementById("lobbyPhasePanel");
+  const lobbyPhaseStatusEl = document.getElementById("lobbyPhaseStatus");
   const connectionStateEl = document.getElementById("connectionState");
-  const contextButtons = Array.from(document.querySelectorAll(".context-button"));
-  const sessionPanelEl = document.getElementById("sessionPanel");
-  const mapPanelEl = document.getElementById("mapPanel");
-  const feedPanelEl = document.getElementById("feedPanel");
+  const activeUiEls = Array.from(document.querySelectorAll("[data-active-ui='true']"));
 
   const kaijuNameEl = document.getElementById("kaijuName");
   const kaijuArchetypeEl = document.getElementById("kaijuArchetype");
@@ -68,7 +115,9 @@
   const distanceTextEl = document.getElementById("distanceText");
   const distanceFillEl = document.getElementById("distanceFill");
 
+  const moveUpButtonEl = document.getElementById("moveUpButton");
   const moveLeftButtonEl = document.getElementById("moveLeftButton");
+  const moveDownButtonEl = document.getElementById("moveDownButton");
   const moveRightButtonEl = document.getElementById("moveRightButton");
   const attackButtonEl = document.getElementById("attackButton");
   const abilityButtonEl = document.getElementById("abilityButton");
@@ -86,6 +135,10 @@
   const spectatorRadarOverlayEl = document.getElementById("spectatorRadarOverlay");
   const cooldownsEl = document.getElementById("cooldowns");
   const signalFeedEl = document.getElementById("signalFeed");
+  const mapAttackHintEl = document.getElementById("mapAttackHint");
+  const hudOpacityControlEl = document.getElementById("hudOpacityControl");
+  const hudOpacityValueEl = document.getElementById("hudOpacityValue");
+  const mapClickLayerEl = document.getElementById("mapClickLayer");
 
   const continueOverlayEl = document.getElementById("continueOverlay");
   const continueCountdownEl = document.getElementById("continueCountdown");
@@ -98,6 +151,7 @@
 
   const COIN_DROP_WAV_DATA_URI =
     "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+  const RECONNECT_TOKEN_STORAGE_KEY = "kaijuReconnectToken";
 
   let spectatorMap = null;
   let spectatorRadarCtx = null;
@@ -122,31 +176,136 @@
     return String(error);
   }
 
+  function readStoredReconnectToken() {
+    const raw = localStorage.getItem(RECONNECT_TOKEN_STORAGE_KEY);
+    if (!raw) {
+      return "";
+    }
+
+    const reconnectToken = String(raw).trim();
+    if (!reconnectToken) {
+      localStorage.removeItem(RECONNECT_TOKEN_STORAGE_KEY);
+      return "";
+    }
+
+    return reconnectToken;
+  }
+
+  function storeReconnectToken(reconnectToken) {
+    const sanitizedToken = String(reconnectToken || "").trim();
+    if (!sanitizedToken) {
+      localStorage.removeItem(RECONNECT_TOKEN_STORAGE_KEY);
+      if (window.KaijuSession) {
+        window.KaijuSession.setReconnectionToken("");
+      }
+      return;
+    }
+
+    localStorage.setItem(RECONNECT_TOKEN_STORAGE_KEY, sanitizedToken);
+    if (window.KaijuSession) {
+      window.KaijuSession.setReconnectionToken(sanitizedToken);
+    }
+  }
+
+  function persistRoomSession(room) {
+    if (!window.KaijuSession || !room) {
+      return;
+    }
+
+    window.KaijuSession.setCurrentMatchId(room.roomId || room.id || "");
+    if (room.reconnectionToken) {
+      window.KaijuSession.setReconnectionToken(room.reconnectionToken);
+    }
+  }
+
+  function routeToLobby(clearMatchSession) {
+    if (window.KaijuSession && clearMatchSession) {
+      window.KaijuSession.clearMatchSession();
+    }
+
+    window.location.assign("/lobby.html");
+  }
+
+  function updatePhaseUi() {
+    const isActive = state.phase === "ACTIVE";
+
+    activeUiEls.forEach((element) => {
+      element.style.display = isActive ? "" : "none";
+    });
+
+    if (!lobbyPhasePanelEl || !lobbyPhaseStatusEl) {
+      return;
+    }
+
+    lobbyPhasePanelEl.style.display = isActive ? "none" : "";
+    if (state.phase === "LOBBY") {
+      lobbyPhaseStatusEl.textContent = "Lobby ready. Waiting for commander to start the match...";
+    } else if (state.phase === "WAITING") {
+      lobbyPhaseStatusEl.textContent = "Waiting for all players to enter lobby...";
+    } else {
+      lobbyPhaseStatusEl.textContent = "Awaiting lobby phase...";
+    }
+  }
+
   function updateConnectionState(text, className) {
     connectionStateEl.textContent = text;
     connectionStateEl.className = `status ${className || ""}`.trim();
   }
 
-  function setContextPanel(panelName) {
-    const panels = {
-      session: sessionPanelEl,
-      map: mapPanelEl,
-      feed: feedPanelEl,
-    };
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
 
-    Object.entries(panels).forEach(([key, panel]) => {
-      if (!panel) {
-        return;
-      }
-      panel.classList.toggle("hidden", key !== panelName);
-    });
+  function readInputSettings() {
+    const raw = localStorage.getItem(INPUT_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return { ...DEFAULT_INPUT_SETTINGS };
+    }
 
-    contextButtons.forEach((button) => {
-      button.classList.toggle("active", button.dataset.target === panelName);
-    });
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        deadzone: clamp(Number(parsed?.deadzone) || DEFAULT_INPUT_SETTINGS.deadzone, 0, 0.35),
+        sensitivity: clamp(Number(parsed?.sensitivity) || DEFAULT_INPUT_SETTINGS.sensitivity, 0.65, 2),
+      };
+    } catch {
+      return { ...DEFAULT_INPUT_SETTINGS };
+    }
+  }
 
-    if (panelName === "map") {
-      resizeSpectatorMap();
+  function storeInputSettings(settings) {
+    localStorage.setItem(INPUT_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  function readHudSettings() {
+    const raw = localStorage.getItem(HUD_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return { ...DEFAULT_HUD_SETTINGS };
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        opacity: clamp(Number(parsed?.opacity) || DEFAULT_HUD_SETTINGS.opacity, 0.35, 0.95),
+      };
+    } catch {
+      return { ...DEFAULT_HUD_SETTINGS };
+    }
+  }
+
+  function storeHudSettings(settings) {
+    localStorage.setItem(HUD_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  function applyHudOpacity(opacity) {
+    const sanitized = clamp(opacity, 0.35, 0.95);
+    document.documentElement.style.setProperty("--panel-opacity", sanitized.toFixed(2));
+
+    if (hudOpacityControlEl) {
+      hudOpacityControlEl.value = String(Math.round(sanitized * 100));
+    }
+    if (hudOpacityValueEl) {
+      hudOpacityValueEl.textContent = `${Math.round(sanitized * 100)}%`;
     }
   }
 
@@ -355,6 +514,56 @@
     return { x: point.x, y: point.y };
   }
 
+  function updateSmoothedMapCenter() {
+    const controlled = state.controlledLeviathan;
+    if (!controlled || state.spectatorMode || controlled.status === "CONTAINED") {
+      state.smoothedMapCenter.x = 50;
+      state.smoothedMapCenter.y = 50;
+      return;
+    }
+
+    const dx = controlled.x - state.smoothedMapCenter.x;
+    const dy = controlled.y - state.smoothedMapCenter.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= MAP_CAMERA_DEADZONE_UNITS) {
+      return;
+    }
+
+    state.smoothedMapCenter.x += dx * MAP_CAMERA_FOLLOW_ALPHA;
+    state.smoothedMapCenter.y += dy * MAP_CAMERA_FOLLOW_ALPHA;
+  }
+
+  function recenterSpectatorMap() {
+    if (!spectatorMap) {
+      return;
+    }
+
+    updateSmoothedMapCenter();
+
+    const centerLatLng = gameToLatLng(state.smoothedMapCenter.x, state.smoothedMapCenter.y);
+    if (!centerLatLng) {
+      return;
+    }
+
+    spectatorMap.panTo(centerLatLng, { animate: false });
+  }
+
+  function mapUnitsToPixels(units) {
+    if (!spectatorMap || !Number.isFinite(units) || units <= 0) {
+      return 0;
+    }
+
+    const origin = gameToLatLng(50, 50);
+    const pointX = gameToLatLng(50 + units, 50);
+    if (!origin || !pointX) {
+      return 0;
+    }
+
+    const a = spectatorMap.latLngToContainerPoint(origin);
+    const b = spectatorMap.latLngToContainerPoint(pointX);
+    return Math.max(0, Math.hypot(b.x - a.x, b.y - a.y));
+  }
+
   function updateSpectatorMapState() {
     if (!state.room || !state.room.state) {
       return;
@@ -369,7 +578,25 @@
     }
 
     spectatorMapState.leviathans = [];
+    const now = Date.now();
     roomState.leviathans.forEach((leviathan) => {
+      const previousSample = state.mapSampleById[leviathan.id];
+      let velocityX = 0;
+      let velocityY = 0;
+      if (previousSample) {
+        const elapsedMs = Math.max(1, now - previousSample.at);
+        velocityX = (leviathan.x - previousSample.x) / elapsedMs;
+        velocityY = (leviathan.y - previousSample.y) / elapsedMs;
+      }
+
+      state.mapSampleById[leviathan.id] = {
+        x: leviathan.x,
+        y: leviathan.y,
+        at: now,
+        velocityX,
+        velocityY,
+      };
+
       spectatorMapState.leviathans.push({
         id: leviathan.id,
         name: leviathan.name,
@@ -380,6 +607,62 @@
         heading: leviathan.heading,
         status: leviathan.status,
       });
+    });
+
+    state.lastMapStateAt = now;
+  }
+
+  function normalizeHeading(heading) {
+    return ((heading % 360) + 360) % 360;
+  }
+
+  function lerpHeading(from, to, alpha) {
+    const fromNorm = normalizeHeading(from || 0);
+    const toNorm = normalizeHeading(to || 0);
+    const shortest = ((toNorm - fromNorm + 540) % 360) - 180;
+    return normalizeHeading(fromNorm + shortest * alpha);
+  }
+
+  function updateRenderedLeviathanPositions() {
+    const now = Date.now();
+    const seenIds = new Set();
+
+    spectatorMapState.leviathans.forEach((leviathan) => {
+      seenIds.add(leviathan.id);
+
+      const sample = state.mapSampleById[leviathan.id];
+      const predictionMs = Math.min(MAP_PREDICTION_MS, Math.max(0, now - state.lastMapStateAt + 16));
+      const predictedX = sample
+        ? clamp(leviathan.x + sample.velocityX * predictionMs, 0, 100)
+        : leviathan.x;
+      const predictedY = sample
+        ? clamp(leviathan.y + sample.velocityY * predictionMs, 0, 100)
+        : leviathan.y;
+
+      const existing = state.renderLeviathansById[leviathan.id];
+      if (!existing) {
+        state.renderLeviathansById[leviathan.id] = {
+          ...leviathan,
+          x: predictedX,
+          y: predictedY,
+        };
+        return;
+      }
+
+      existing.x += (predictedX - existing.x) * MAP_INTERPOLATION_ALPHA;
+      existing.y += (predictedY - existing.y) * MAP_INTERPOLATION_ALPHA;
+      existing.heading = lerpHeading(existing.heading, leviathan.heading, 0.3);
+      existing.hp = leviathan.hp;
+      existing.hpMax = leviathan.hpMax;
+      existing.status = leviathan.status;
+      existing.name = leviathan.name;
+    });
+
+    Object.keys(state.renderLeviathansById).forEach((leviathanId) => {
+      if (!seenIds.has(leviathanId)) {
+        delete state.renderLeviathansById[leviathanId];
+        delete state.mapSampleById[leviathanId];
+      }
     });
   }
 
@@ -396,6 +679,7 @@
 
     const ctx = spectatorRadarCtx;
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    recenterSpectatorMap();
 
     radarSweepDeg = (radarSweepDeg + 0.45) % 360;
     const base = gameToPixel(spectatorMapState.cityBase.x, spectatorMapState.cityBase.y);
@@ -405,6 +689,28 @@
 
     const sweepRadius = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
     const sweepRad = (radarSweepDeg * Math.PI) / 180;
+    const controlledLeviathan = state.controlledLeviathan;
+    const isControlledActive =
+      controlledLeviathan && !state.spectatorMode && controlledLeviathan.status !== "CONTAINED";
+    const rangeRadiusPx = mapUnitsToPixels(KAIJU_ATTACK_RANGE_UNITS);
+
+    if (isControlledActive && rangeRadiusPx > 0) {
+      const controlledPoint = gameToPixel(controlledLeviathan.x, controlledLeviathan.y);
+      if (controlledPoint) {
+        ctx.beginPath();
+        ctx.arc(controlledPoint.x, controlledPoint.y, rangeRadiusPx, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(255, 143, 63, 0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([7, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = "rgba(255, 143, 63, 0.09)";
+        ctx.beginPath();
+        ctx.arc(controlledPoint.x, controlledPoint.y, rangeRadiusPx, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
 
     for (let i = 0; i < 28; i++) {
       const trailRad = sweepRad - (i * Math.PI) / 180;
@@ -417,7 +723,8 @@
       ctx.fill();
     }
 
-    spectatorMapState.leviathans.forEach((leviathan) => {
+    updateRenderedLeviathanPositions();
+    Object.values(state.renderLeviathansById).forEach((leviathan) => {
       const point = gameToPixel(leviathan.x, leviathan.y);
       if (!point) {
         return;
@@ -438,11 +745,34 @@
       ctx.fill();
       ctx.shadowBlur = 0;
 
+      const headingRadians = ((leviathan.heading || 0) * Math.PI) / 180;
+      const headingLineLength = 16;
+      ctx.beginPath();
+      ctx.moveTo(point.x, point.y);
+      ctx.lineTo(
+        point.x + Math.cos(headingRadians) * headingLineLength,
+        point.y + Math.sin(headingRadians) * headingLineLength
+      );
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.65;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
       const hpFraction = leviathan.hpMax > 0 ? leviathan.hp / leviathan.hpMax : 0;
       ctx.fillStyle = "rgba(4, 10, 12, 0.84)";
       ctx.fillRect(point.x - 14, point.y + 8, 28, 3);
       ctx.fillStyle = hpFraction > 0.5 ? "#84ffc5" : hpFraction > 0.25 ? "#ff8f3f" : "#ff4f59";
       ctx.fillRect(point.x - 14, point.y + 8, 28 * hpFraction, 3);
+
+      const label = String(leviathan.name || "KAIJU").trim().toUpperCase();
+      ctx.fillStyle = color;
+      ctx.font = "9px 'Trebuchet MS', sans-serif";
+      ctx.textAlign = "center";
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 4;
+      ctx.fillText(label.slice(0, 12), point.x, point.y + 19);
+      ctx.shadowBlur = 0;
     });
   }
 
@@ -510,6 +840,15 @@
   }
 
   function renderStatus() {
+    if (state.phase !== "ACTIVE") {
+      setMode("LOBBY", "alert", "Waiting for commander to start the match.");
+      setPrimaryAlert("Pre-match lobby active.", "alert");
+      setDirectionalButtonsDisabled(true);
+      attackButtonEl.disabled = true;
+      abilityButtonEl.disabled = true;
+      return;
+    }
+
     const leviathan = state.controlledLeviathan;
     if (!leviathan) {
       kaijuNameEl.textContent = "SPECTATING";
@@ -522,8 +861,10 @@
       renderHpBar(0, 1);
       setMode("OFFLINE", "critical", "Join a match to arm controls.");
       setPrimaryAlert("Awaiting tactical telemetry.", "nominal");
-      moveLeftButtonEl.disabled = true;
-      moveRightButtonEl.disabled = true;
+      if (mapAttackHintEl) {
+        mapAttackHintEl.textContent = "Join a match to enable map-click attacks.";
+      }
+      setDirectionalButtonsDisabled(true);
       attackButtonEl.disabled = true;
       abilityButtonEl.disabled = true;
       return;
@@ -544,18 +885,32 @@
 
     state.spectatorMode = Boolean(leviathan.isSpectator);
     const canAct = leviathan.status !== "CONTAINED" && !state.spectatorMode;
-    moveLeftButtonEl.disabled = !canAct;
-    moveRightButtonEl.disabled = !canAct;
+    setDirectionalButtonsDisabled(!canAct);
 
     if (state.spectatorMode) {
+      resetDirectionalInput();
       setMode("SPECTATOR", "alert", "Inputs are locked. Monitoring commander telemetry.");
       setPrimaryAlert("SPECTATOR MODE: observe and await next deployment.", "alert");
+      if (mapAttackHintEl) {
+        mapAttackHintEl.textContent = "Spectator mode: map attack input is disabled.";
+      }
     } else if (leviathan.status === "CONTAINED") {
+      resetDirectionalInput();
       setMode("CONTAINED", "critical", "Continue before countdown reaches zero.");
       setPrimaryAlert("CONTAINMENT BREACH: continue required to respawn.", "critical");
+      if (mapAttackHintEl) {
+        mapAttackHintEl.textContent = "Contained: continue to re-enable map attack controls.";
+      }
     } else {
       setMode("ACTIVE", "nominal", "Combat controls online.");
       setPrimaryAlert("TACTICAL PRIORITY: pressure city base while evading assets.", "nominal");
+      if (mapAttackHintEl) {
+        const now = Date.now();
+        const attackReady = now >= state.cooldownReadyAt.attack;
+        mapAttackHintEl.textContent = attackReady
+          ? "Click anywhere on the map to attack the city." 
+          : `Attack cooling: ${((state.cooldownReadyAt.attack - now) / 1000).toFixed(1)}s`;
+      }
     }
 
     const now = Date.now();
@@ -690,6 +1045,7 @@
   }
 
   function uiTick() {
+    updateDirectionalMovement(Date.now());
     renderStatus();
     if (state.spectatorMapReady) {
       drawSpectatorMap();
@@ -736,42 +1092,44 @@
     const endpoint = `${wsProtocol}//${window.location.host}`;
     const client = new window.Colyseus.Client(endpoint);
 
-    const reconnectToken = reconnectTokenEl.value.trim();
-    const joinOptions = {
-      playerName: (pilotNameEl.value || "Kaiju Pilot").trim(),
+    const playerName = (pilotNameEl.value || "Kaiju Pilot").trim();
+    const reconnectToken =
+      (window.KaijuSession && window.KaijuSession.getReconnectionToken()) || readStoredReconnectToken();
+
+    // Join the specific room directly using Colyseus
+    const room = await client.join("match", selectedRoomId, {
+      playerName: playerName,
+      playerRole: "kaiju",
       ...(reconnectToken ? { reconnectToken } : {}),
-    };
-
-    const reservationResponse = await fetch(`/api/matches/${encodeURIComponent(selectedRoomId)}/kaiju-join`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(joinOptions),
     });
-    if (!reservationResponse.ok) {
-      const payload = await reservationResponse.json().catch(() => ({}));
-      throw new Error(payload.error || "Failed to reserve Kaiju seat");
-    }
 
-    const reservation = await reservationResponse.json();
-    const seatReservation = {
-      sessionId: reservation.sessionId,
-      room: {
-        name: reservation.roomName || "match",
-        roomId: reservation.roomId,
-        processId: reservation.processId,
-        publicAddress: reservation.publicAddress || window.location.host,
-      },
-    };
-
-    const room = await client.consumeSeatReservation(seatReservation);
     state.room = room;
+    persistRoomSession(room);
     state.previousHp = 0;
     state.spectatorMode = false;
     state.gameOverAnnounced = false;
 
+    if (room.state?.metadata?.state) {
+      state.phase = room.state.metadata.state;
+    }
+    updatePhaseUi();
+
     room.onStateChange(() => {
+      if (room.state?.metadata?.state) {
+        state.phase = room.state.metadata.state;
+      }
       state.controlledLeviathan = findControlledLeviathan();
       updateSpectatorMapState();
+      updatePhaseUi();
+    });
+
+    room.onMessage("match.phase", (payload) => {
+      if (!payload?.phase) {
+        return;
+      }
+
+      state.phase = payload.phase;
+      updatePhaseUi();
     });
 
     room.onMessage("signal.feed", (payload) => {
@@ -779,6 +1137,8 @@
     });
 
     room.onMessage("match.start", (payload) => {
+      state.phase = "ACTIVE";
+      updatePhaseUi();
       appendFeed(`MATCH START - ${payload.cityName}`, "nominal", payload.startedAt);
     });
 
@@ -826,36 +1186,185 @@
     });
 
     room.onMessage("kaiju.reconnect.token", (payload) => {
-      reconnectTokenEl.value = payload.reconnectToken;
-      localStorage.setItem("kaijuReconnectToken", payload.reconnectToken);
+      storeReconnectToken(payload.reconnectToken);
       appendFeed("Reconnect token issued", "nominal", Date.now());
     });
 
     state.controlledLeviathan = findControlledLeviathan();
+    updatePhaseUi();
     updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
   }
 
   function flushQueuedMove() {
     state.queuedMoveTimer = 0;
-    if (state.queuedMoveDelta === 0) {
+    if (!state.queuedMoveVector) {
       return;
     }
 
-    const delta = state.queuedMoveDelta;
-    state.queuedMoveDelta = 0;
-    sendMove(delta);
+    const vector = state.queuedMoveVector;
+    state.queuedMoveVector = null;
+    sendMoveVector(vector.x, vector.y);
   }
 
-  function sendMove(deltaHeading) {
+  function buildDirectionalVector() {
+    const keyboardX = (state.pressedDirections.right ? 1 : 0) - (state.pressedDirections.left ? 1 : 0);
+    const keyboardY = (state.pressedDirections.down ? 1 : 0) - (state.pressedDirections.up ? 1 : 0);
+    const gamepad = getGamepadDirectionalVector();
+
+    const x = keyboardX + gamepad.x;
+    const y = keyboardY + gamepad.y;
+    return { x, y };
+  }
+
+  function applyInputCurve(vector) {
+    const magnitude = Math.hypot(vector.x, vector.y);
+    if (magnitude <= 0.0001) {
+      return { x: 0, y: 0 };
+    }
+
+    const deadzone = state.inputSettings.deadzone;
+    if (magnitude <= deadzone) {
+      return { x: 0, y: 0 };
+    }
+
+    const normalizedX = vector.x / magnitude;
+    const normalizedY = vector.y / magnitude;
+    const postDeadzone = clamp((magnitude - deadzone) / (1 - deadzone), 0, 1);
+    const curvedMagnitude = Math.pow(postDeadzone, state.inputSettings.sensitivity);
+
+    return {
+      x: normalizedX * curvedMagnitude,
+      y: normalizedY * curvedMagnitude,
+    };
+  }
+
+  function moveTowardVector(current, target, maxDelta) {
+    const dx = target.x - current.x;
+    const dy = target.y - current.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 0.0001 || distance <= maxDelta) {
+      return { x: target.x, y: target.y };
+    }
+
+    const inv = maxDelta / distance;
+    return {
+      x: current.x + dx * inv,
+      y: current.y + dy * inv,
+    };
+  }
+
+  function getGamepadDirectionalVector() {
+    if (!navigator.getGamepads) {
+      return { x: 0, y: 0 };
+    }
+
+    const pads = navigator.getGamepads();
+    if (!pads) {
+      return { x: 0, y: 0 };
+    }
+
+    for (let i = 0; i < pads.length; i++) {
+      const pad = pads[i];
+      if (!pad || !pad.connected) {
+        continue;
+      }
+
+      const axisX = Number.isFinite(pad.axes[0]) ? pad.axes[0] : 0;
+      const axisY = Number.isFinite(pad.axes[1]) ? pad.axes[1] : 0;
+      if (Math.abs(axisX) < 0.01 && Math.abs(axisY) < 0.01) {
+        continue;
+      }
+
+      return { x: axisX, y: axisY };
+    }
+
+    return { x: 0, y: 0 };
+  }
+
+  function normalizeMovementVector(vector) {
+    if (!vector) {
+      return { x: 0, y: 0 };
+    }
+
+    const magnitude = Math.hypot(vector.x, vector.y);
+    if (magnitude <= 0.0001) {
+      return { x: 0, y: 0 };
+    }
+
+    return {
+      x: vector.x / magnitude,
+      y: vector.y / magnitude,
+    };
+  }
+
+  function hasMeaningfulVectorDelta(nextVector) {
+    if (!state.lastMoveVector) {
+      return true;
+    }
+
+    const dx = Math.abs(state.lastMoveVector.x - nextVector.x);
+    const dy = Math.abs(state.lastMoveVector.y - nextVector.y);
+    return dx > 0.01 || dy > 0.01;
+  }
+
+  function setDirectionalButtonsDisabled(disabled) {
+    [moveUpButtonEl, moveLeftButtonEl, moveDownButtonEl, moveRightButtonEl].forEach((buttonEl) => {
+      if (buttonEl) {
+        buttonEl.disabled = disabled;
+      }
+    });
+  }
+
+  function resetDirectionalInput() {
+    state.pressedDirections.up = false;
+    state.pressedDirections.down = false;
+    state.pressedDirections.left = false;
+    state.pressedDirections.right = false;
+    state.directionalButtonsPressed.up = false;
+    state.directionalButtonsPressed.down = false;
+    state.directionalButtonsPressed.left = false;
+    state.directionalButtonsPressed.right = false;
+    state.queuedMoveVector = null;
+    state.smoothedMoveVector = { x: 0, y: 0 };
+    state.lastInputFrameAt = 0;
+
+    if (state.queuedMoveTimer) {
+      window.clearTimeout(state.queuedMoveTimer);
+      state.queuedMoveTimer = 0;
+    }
+
+    if (state.lastMoveVector) {
+      state.lastMoveVector = null;
+      if (state.room) {
+        state.room.send("kaiju.move", { moveX: 0, moveY: 0 });
+        state.lastMoveSentAt = Date.now();
+      }
+    }
+  }
+
+  function canSendDirectionalInput() {
     const leviathan = state.controlledLeviathan;
     if (!state.room || !leviathan || state.spectatorMode || leviathan.status === "CONTAINED") {
+      return false;
+    }
+
+    return true;
+  }
+
+  function sendMoveVector(nextX, nextY) {
+    if (!canSendDirectionalInput()) {
+      return;
+    }
+
+    const nextVector = normalizeMovementVector({ x: nextX, y: nextY });
+    if (!hasMeaningfulVectorDelta(nextVector)) {
       return;
     }
 
     const now = Date.now();
     const elapsed = now - state.lastMoveSentAt;
     if (elapsed < MOVE_SEND_INTERVAL_MS) {
-      state.queuedMoveDelta = deltaHeading;
+      state.queuedMoveVector = nextVector;
       if (!state.queuedMoveTimer) {
         state.queuedMoveTimer = window.setTimeout(
           flushQueuedMove,
@@ -865,21 +1374,149 @@
       return;
     }
 
-    const nextHeading = ((leviathan.heading + deltaHeading) % 360 + 360) % 360;
-    state.room.send("kaiju.move", { heading: nextHeading });
+    state.room.send("kaiju.move", {
+      moveX: Number(nextVector.x.toFixed(4)),
+      moveY: Number(nextVector.y.toFixed(4)),
+    });
     state.lastMoveSentAt = now;
-    appendFeed(`Heading set: ${Math.round(nextHeading)} deg`, "nominal", Date.now());
+    state.lastMoveVector = nextVector;
+  }
+
+  function updateDirectionalMovement(now) {
+    const frameNow = typeof now === "number" ? now : Date.now();
+    if (!canSendDirectionalInput()) {
+      return;
+    }
+
+    const rawVector = normalizeMovementVector(buildDirectionalVector());
+    const targetVector = applyInputCurve(rawVector);
+
+    if (!state.lastInputFrameAt) {
+      state.lastInputFrameAt = frameNow;
+    }
+
+    const deltaSeconds = clamp((frameNow - state.lastInputFrameAt) / 1000, 0, 0.05);
+    state.lastInputFrameAt = frameNow;
+
+    const currentMagnitude = Math.hypot(state.smoothedMoveVector.x, state.smoothedMoveVector.y);
+    const targetMagnitude = Math.hypot(targetVector.x, targetVector.y);
+    const responseRate = targetMagnitude > currentMagnitude ? MOVE_ACCEL_PER_SECOND : MOVE_DECEL_PER_SECOND;
+    const maxDelta = responseRate * deltaSeconds;
+
+    state.smoothedMoveVector = moveTowardVector(state.smoothedMoveVector, targetVector, maxDelta);
+    sendMoveVector(state.smoothedMoveVector.x, state.smoothedMoveVector.y);
+  }
+
+  function handleDirectionalButtonState(direction, isPressed) {
+    if (!(direction in state.pressedDirections)) {
+      return;
+    }
+
+    state.directionalButtonsPressed[direction] = isPressed;
+    state.pressedDirections[direction] = isPressed;
+    updateDirectionalMovement(Date.now());
+  }
+
+  function bindDirectionalButton(buttonEl, direction) {
+    if (!buttonEl) {
+      return;
+    }
+
+    const onPress = (event) => {
+      event.preventDefault();
+      handleDirectionalButtonState(direction, true);
+    };
+
+    const onRelease = (event) => {
+      event.preventDefault();
+      handleDirectionalButtonState(direction, false);
+    };
+
+    buttonEl.addEventListener("pointerdown", onPress);
+    buttonEl.addEventListener("pointerup", onRelease);
+    buttonEl.addEventListener("pointercancel", onRelease);
+    buttonEl.addEventListener("pointerleave", onRelease);
+    buttonEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      updateDirectionalMovement();
+    });
+  }
+
+  function bindDirectionalKeyboardControls() {
+    window.addEventListener("keydown", (event) => {
+      const direction = MOVE_INPUT_BY_KEY[event.code];
+      if (!direction) {
+        return;
+      }
+
+      event.preventDefault();
+      if (state.pressedDirections[direction]) {
+        return;
+      }
+
+      state.pressedDirections[direction] = true;
+      updateDirectionalMovement(Date.now());
+    });
+
+    window.addEventListener("keyup", (event) => {
+      const direction = MOVE_INPUT_BY_KEY[event.code];
+      if (!direction) {
+        return;
+      }
+
+      event.preventDefault();
+      state.pressedDirections[direction] = Boolean(state.directionalButtonsPressed[direction]);
+      updateDirectionalMovement(Date.now());
+    });
+
+    window.addEventListener("blur", () => {
+      resetDirectionalInput();
+    });
   }
 
   function sendAttack() {
     const leviathan = state.controlledLeviathan;
-    if (!state.room || !leviathan || leviathan.status === "CONTAINED") {
+    if (
+      !state.room ||
+      !leviathan ||
+      state.spectatorMode ||
+      leviathan.status === "CONTAINED" ||
+      Date.now() < state.cooldownReadyAt.attack
+    ) {
       return;
     }
 
     state.room.send("kaiju.attack", {});
     state.cooldownReadyAt.attack = Date.now() + ATTACK_COOLDOWN_MS;
     appendFeed("Attack dispatched", "alert", Date.now());
+  }
+
+  function sendMapAttack(event) {
+    if (!spectatorLeafletMapEl || !event.target) {
+      return;
+    }
+
+    const targetElement = event.target;
+    const clickedMap =
+      targetElement === spectatorLeafletMapEl ||
+      (typeof targetElement.closest === "function" && targetElement.closest("#spectatorLeafletMap"));
+
+    if (!clickedMap) {
+      return;
+    }
+
+    if (mapClickLayerEl && typeof event.offsetX === "number" && typeof event.offsetY === "number") {
+      const pingEl = document.createElement("span");
+      pingEl.className = "map-click-ping";
+      pingEl.style.left = `${event.offsetX}px`;
+      pingEl.style.top = `${event.offsetY}px`;
+      mapClickLayerEl.appendChild(pingEl);
+      window.setTimeout(() => {
+        pingEl.remove();
+      }, 540);
+    }
+
+    sendAttack();
   }
 
   function sendAbility() {
@@ -935,18 +1572,32 @@
       }
     });
 
-    moveLeftButtonEl.addEventListener("click", () => sendMove(-18));
-    moveRightButtonEl.addEventListener("click", () => sendMove(18));
+    bindDirectionalButton(moveUpButtonEl, "up");
+    bindDirectionalButton(moveLeftButtonEl, "left");
+    bindDirectionalButton(moveDownButtonEl, "down");
+    bindDirectionalButton(moveRightButtonEl, "right");
+    bindDirectionalKeyboardControls();
+    window.addEventListener("gamepadconnected", (event) => {
+      appendFeed(`GAMEPAD CONNECTED :: ${event.gamepad.id}`, "nominal", Date.now());
+    });
+    window.addEventListener("gamepaddisconnected", (event) => {
+      appendFeed(`GAMEPAD DISCONNECTED :: ${event.gamepad.id}`, "alert", Date.now());
+    });
     attackButtonEl.addEventListener("click", sendAttack);
+    if (spectatorLeafletMapEl) {
+      spectatorLeafletMapEl.addEventListener("click", sendMapAttack);
+    }
     abilityButtonEl.addEventListener("click", sendAbility);
     continueButtonEl.addEventListener("click", sendContinue);
-
-    contextButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        const target = button.dataset.target || "session";
-        setContextPanel(target);
+    if (hudOpacityControlEl) {
+      hudOpacityControlEl.addEventListener("input", (event) => {
+        const value = Number(event.target?.value ?? 90);
+        const opacity = clamp(value / 100, 0.35, 0.95);
+        state.hudSettings.opacity = opacity;
+        applyHudOpacity(opacity);
+        storeHudSettings(state.hudSettings);
       });
-    });
+    }
 
     window.addEventListener("beforeunload", () => {
       if (uiTickHandle) {
@@ -957,18 +1608,45 @@
 
   async function initialize() {
     updateConnectionState("OFFLINE", "critical");
-    const token = localStorage.getItem("kaijuReconnectToken");
-    if (token) {
-      reconnectTokenEl.value = token;
-    }
+    state.inputSettings = readInputSettings();
+    state.hudSettings = readHudSettings();
+    storeInputSettings(state.inputSettings);
+    storeHudSettings(state.hudSettings);
+    applyHudOpacity(state.hudSettings.opacity);
 
     wireEvents();
-    setContextPanel("session");
     preloadCoinAudioFallback();
     initializeSpectatorMap();
     resizeSpectatorMap();
     window.addEventListener("resize", resizeSpectatorMap);
-    await refreshMatches();
+
+    const entrySession = window.KaijuSession ? window.KaijuSession.getEntrySession() : null;
+    if (entrySession?.playerName) {
+      pilotNameEl.value = entrySession.playerName;
+    }
+
+    const currentMatchId = window.KaijuSession ? window.KaijuSession.getCurrentMatchId() : "";
+    const reconnectToken = window.KaijuSession
+      ? window.KaijuSession.getReconnectionToken()
+      : readStoredReconnectToken();
+
+    if (currentMatchId && reconnectToken) {
+      roomIdEl.value = currentMatchId;
+      try {
+        await joinMatch();
+      } catch (error) {
+        appendFeed(`RECONNECT FAILED: ${formatError(error)}`, "critical", Date.now());
+        routeToLobby(true);
+        return;
+      }
+    } else if (currentMatchId) {
+      roomIdEl.value = currentMatchId;
+      await refreshMatches();
+    } else {
+      await refreshMatches();
+    }
+
+    updatePhaseUi();
     uiTick();
   }
 

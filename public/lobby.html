@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaiju Arcade Matchmaking Lobby</title>
+    <script src="https://unpkg.com/colyseus.js@0.16.20/dist/colyseus.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1d29;
+        --panel: rgba(22, 34, 46, 0.92);
+        --ink: #f3fbff;
+        --muted: #a8c7d9;
+        --accent: #62f4d6;
+        --accent-alt: #ffd166;
+        --danger: #ff7b7b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(120deg, rgba(98, 244, 214, 0.08), transparent 44%),
+          linear-gradient(300deg, rgba(255, 209, 102, 0.1), transparent 45%),
+          var(--bg);
+        display: grid;
+        place-items: center;
+        padding: 16px;
+      }
+
+      .layout {
+        width: min(920px, 100%);
+        background: var(--panel);
+        border: 1px solid rgba(98, 244, 214, 0.3);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 20px 36px rgba(0, 0, 0, 0.35);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.4rem, 3vw, 2rem);
+      }
+
+      .summary {
+        margin: 8px 0 16px;
+        color: var(--muted);
+      }
+
+      .identity {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        padding: 6px 12px;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      button {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .primary {
+        background: linear-gradient(90deg, var(--accent), var(--accent-alt));
+        color: #0b1720;
+      }
+
+      .secondary {
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--ink);
+      }
+
+      .danger {
+        background: rgba(255, 123, 123, 0.22);
+        color: #ffd6d6;
+      }
+
+      .status {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      li {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 12px;
+        margin-bottom: 10px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .room-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .room-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .error {
+        color: var(--danger);
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <h1>Matchmaking Lobby</h1>
+      <p class="summary">Discover active matches in realtime or create a new one.</p>
+
+      <section class="identity" aria-label="Current player identity">
+        <div class="pill"><strong>Player</strong><span id="playerName">-</span></div>
+        <div class="pill"><strong>Role</strong><span id="playerRole">-</span></div>
+      </section>
+
+      <section class="controls" aria-label="Lobby actions">
+        <button id="createMatchButton" class="primary" type="button">Create Match</button>
+        <button id="refreshButton" class="secondary" type="button">Refresh List</button>
+        <button id="changeIdentityButton" class="danger" type="button">Change Identity</button>
+      </section>
+
+      <p id="statusText" class="status">Connecting to lobby...</p>
+      <p id="errorText" class="error" role="alert" aria-live="polite"></p>
+
+      <ul id="roomList" aria-label="Available matches"></ul>
+    </main>
+
+    <script src="/common/session-manager.js"></script>
+    <script src="/common/colyseus-client.js"></script>
+    <script>
+      (() => {
+        const state = {
+          client: null,
+          lobbyRoom: null,
+          rooms: [],
+          isBusy: false,
+        };
+
+        const playerNameEl = document.getElementById("playerName");
+        const playerRoleEl = document.getElementById("playerRole");
+        const statusTextEl = document.getElementById("statusText");
+        const errorTextEl = document.getElementById("errorText");
+        const roomListEl = document.getElementById("roomList");
+        const createMatchButtonEl = document.getElementById("createMatchButton");
+        const refreshButtonEl = document.getElementById("refreshButton");
+        const changeIdentityButtonEl = document.getElementById("changeIdentityButton");
+
+        function setStatus(text) {
+          statusTextEl.textContent = text;
+        }
+
+        function setError(text) {
+          errorTextEl.textContent = text || "";
+        }
+
+        function updateIdentityHeader() {
+          const entrySession = window.KaijuSession.getEntrySession();
+          playerNameEl.textContent = entrySession.playerName || "-";
+          playerRoleEl.textContent = entrySession.role || "-";
+          return entrySession;
+        }
+
+        function getJoinOptions() {
+          const entrySession = window.KaijuSession.getEntrySession();
+          return {
+            playerName: entrySession.playerName,
+            role: entrySession.role,
+          };
+        }
+
+        function redirectToRoleClient(role) {
+          const path = role === "commander" ? "/commander/index.html" : "/kaiju/index.html";
+          window.location.assign(path);
+        }
+
+        function setBusy(value) {
+          state.isBusy = Boolean(value);
+          createMatchButtonEl.disabled = state.isBusy;
+        }
+
+        function renderRooms() {
+          roomListEl.innerHTML = "";
+
+          if (state.rooms.length === 0) {
+            const empty = document.createElement("li");
+            empty.textContent = "No open matches yet. Create one to get started.";
+            roomListEl.appendChild(empty);
+            return;
+          }
+
+          state.rooms.forEach((room) => {
+            const rowEl = document.createElement("li");
+
+            const titleRowEl = document.createElement("div");
+            titleRowEl.className = "room-row";
+
+            const titleEl = document.createElement("strong");
+            titleEl.textContent = `Match ${room.roomId}`;
+            titleRowEl.appendChild(titleEl);
+
+            const stateBadge = document.createElement("span");
+            const roomState = String(room.metadata?.state || "waiting").toLowerCase();
+            stateBadge.textContent = roomState;
+            titleRowEl.appendChild(stateBadge);
+
+            const metaEl = document.createElement("div");
+            metaEl.className = "room-meta";
+            metaEl.innerHTML = `
+              <span>Players: ${room.clients}/${room.maxClients || "-"}</span>
+              <span>Mode: ${room.metadata?.gameMode || "standard"}</span>
+              <span>City: ${room.metadata?.cityName || "Unknown"}</span>
+            `;
+
+            const joinBtn = document.createElement("button");
+            joinBtn.className = "secondary";
+            joinBtn.type = "button";
+            joinBtn.textContent = "Join Match";
+            joinBtn.addEventListener("click", () => {
+              joinMatch(room.roomId);
+            });
+
+            rowEl.appendChild(titleRowEl);
+            rowEl.appendChild(metaEl);
+            rowEl.appendChild(joinBtn);
+            roomListEl.appendChild(rowEl);
+          });
+        }
+
+        function normalizeRoomList(rooms) {
+          state.rooms = (Array.isArray(rooms) ? rooms : [])
+            .filter((room) => String(room.name || "") === "match")
+            .filter((room) => !room.locked);
+          renderRooms();
+        }
+
+        async function joinMatch(roomId) {
+          if (!roomId || state.isBusy) {
+            return;
+          }
+
+          setError("");
+          setBusy(true);
+          setStatus(`Joining match ${roomId}...`);
+
+          try {
+            const joinOptions = getJoinOptions();
+            const room = await window.KaijuColyseusClient.joinMatchById(state.client, roomId, joinOptions);
+
+            window.KaijuSession.setCurrentMatchId(room.roomId || roomId);
+            window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+
+            if (state.lobbyRoom) {
+              await state.lobbyRoom.leave();
+            }
+
+            redirectToRoleClient(joinOptions.role);
+          } catch (error) {
+            setError(error instanceof Error ? error.message : "Failed to join selected match.");
+            setStatus("Lobby connected.");
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function createMatch() {
+          if (state.isBusy) {
+            return;
+          }
+
+          setError("");
+          setBusy(true);
+          setStatus("Creating a new match...");
+
+          try {
+            const joinOptions = getJoinOptions();
+            const room = await window.KaijuColyseusClient.createMatch(state.client, joinOptions);
+
+            window.KaijuSession.setCurrentMatchId(room.roomId || "");
+            window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+
+            if (state.lobbyRoom) {
+              await state.lobbyRoom.leave();
+            }
+
+            redirectToRoleClient(joinOptions.role);
+          } catch (error) {
+            setError(error instanceof Error ? error.message : "Failed to create match.");
+            setStatus("Lobby connected.");
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        function ensureEntrySession() {
+          const entrySession = updateIdentityHeader();
+          if (!entrySession.playerName || !entrySession.role) {
+            window.location.assign("/index.html");
+            return false;
+          }
+
+          return true;
+        }
+
+        async function connectLobby() {
+          if (!ensureEntrySession()) {
+            return;
+          }
+
+          setError("");
+          setStatus("Connecting to lobby...");
+
+          try {
+            state.client = window.KaijuColyseusClient.createClient();
+            state.lobbyRoom = await window.KaijuColyseusClient.joinLobby(state.client, getJoinOptions());
+
+            window.KaijuColyseusClient.bindLobbyRoomListHandlers(state.lobbyRoom, {
+              onRooms: (rooms) => normalizeRoomList(rooms),
+              onAdd: (_room, rooms) => normalizeRoomList(rooms),
+              onRemove: (_roomId, rooms) => normalizeRoomList(rooms),
+              onSnapshot: (rooms) => normalizeRoomList(rooms),
+            });
+
+            setStatus("Lobby connected.");
+          } catch (error) {
+            setError(error instanceof Error ? error.message : "Unable to connect to lobby.");
+            setStatus("Lobby unavailable.");
+          }
+        }
+
+        createMatchButtonEl.addEventListener("click", createMatch);
+        refreshButtonEl.addEventListener("click", () => {
+          renderRooms();
+        });
+        changeIdentityButtonEl.addEventListener("click", () => {
+          window.location.assign("/index.html");
+        });
+
+        connectLobby();
+      })();
+    </script>
+  </body>
+</html>

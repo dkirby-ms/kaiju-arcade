@@ -14,42 +14,45 @@
       <header class="hud-header panel">
         <h1>KAIJU PILOT HUD</h1>
         <p class="subline">MOBILE COMMAND SURFACE</p>
+        <div class="hud-opacity-row">
+          <label for="hudOpacityControl">HUD Opacity</label>
+          <input id="hudOpacityControl" type="range" min="35" max="95" step="1" value="90" />
+          <strong id="hudOpacityValue">90%</strong>
+        </div>
       </header>
 
-      <section class="panel context-switcher" aria-label="View selector">
-        <button class="context-button active" type="button" data-target="session">Session</button>
-        <button class="context-button" type="button" data-target="map">Map</button>
-        <button class="context-button" type="button" data-target="feed">Feed</button>
-      </section>
-
-      <section id="sessionPanel" class="panel session-panel context-panel">
+      <section class="panel session-panel">
         <h2>SESSION</h2>
         <label for="pilotName">Pilot</label>
         <input id="pilotName" type="text" maxlength="24" value="Kaiju Pilot" />
 
         <label for="roomId">Room</label>
         <select id="roomId"></select>
-
-        <label for="reconnectToken">Reconnect Token</label>
-        <input id="reconnectToken" type="text" placeholder="Optional token" />
+        <p class="session-guidance">Session recovery is handled automatically in this browser.</p>
 
         <div class="session-actions">
           <button id="refreshMatchesButton" class="secondary">Refresh Matches</button>
           <button id="joinButton" class="primary">Join Match</button>
         </div>
 
+        <div id="lobbyPhasePanel">
+          <p id="lobbyPhaseStatus" class="status">Awaiting lobby phase...</p>
+        </div>
+
         <p id="connectionState" class="status">OFFLINE</p>
       </section>
 
-      <section id="mapPanel" class="panel map-panel context-panel hidden">
+      <section class="panel map-panel" data-active-ui="true">
         <h2>TACTICAL MAP</h2>
+        <p id="mapAttackHint" class="map-attack-hint">Click map to attack when in range.</p>
         <div class="spectator-map-shell">
           <div id="spectatorLeafletMap"></div>
+          <div id="mapClickLayer" aria-hidden="true"></div>
           <canvas id="spectatorRadarOverlay"></canvas>
         </div>
       </section>
 
-      <section class="panel stats-panel">
+      <section class="panel stats-panel" data-active-ui="true">
         <h2>KAIJU STATUS</h2>
         <div class="mode-row" role="status" aria-live="polite">
           <span>MODE</span>
@@ -95,11 +98,15 @@
         </div>
       </section>
 
-      <section class="panel action-panel">
+      <section class="panel action-panel" data-active-ui="true">
         <h2>ABILITIES</h2>
         <div class="ability-grid">
-          <button id="moveLeftButton" class="ability move">Turn Left</button>
-          <button id="moveRightButton" class="ability move">Turn Right</button>
+          <div class="direction-cluster" aria-label="Directional movement controls">
+            <button id="moveUpButton" class="ability move">Up</button>
+            <button id="moveLeftButton" class="ability move">Left</button>
+            <button id="moveDownButton" class="ability move">Down</button>
+            <button id="moveRightButton" class="ability move">Right</button>
+          </div>
           <button id="attackButton" class="ability attack">Attack</button>
           <button id="abilityButton" class="ability special">Ability</button>
         </div>
@@ -129,7 +136,7 @@
         </details>
       </section>
 
-      <section id="spectatorPanel" class="panel spectator-panel hidden">
+      <section id="spectatorPanel" class="panel spectator-panel hidden" data-active-ui="true">
         <h2>SPECTATOR COMMAND VIEW</h2>
         <p class="spectator-subline">INPUT LOCKED - WATCHING COMMANDER TELEMETRY</p>
         <div class="stats-grid">
@@ -152,12 +159,12 @@
         </div>
       </section>
 
-      <section id="feedPanel" class="panel feed-panel context-panel hidden">
+      <section class="panel feed-panel" data-active-ui="true">
         <h2>PILOT FEED</h2>
         <ul id="signalFeed"></ul>
       </section>
 
-      <section id="continueOverlay" class="continue-overlay hidden" aria-live="polite">
+      <section id="continueOverlay" class="continue-overlay hidden" aria-live="polite" data-active-ui="true">
         <p class="contained-text">CONTAINED</p>
         <p class="insert-coin">INSERT COIN</p>
         <p id="continueState" class="continue-state">AUTO-SPECTATOR IN <span id="continueCountdown">10.0</span>s</p>
@@ -166,9 +173,11 @@
         <button id="continueButton" class="continue-button">Continue</button>
       </section>
 
-      <div id="damageLayer" class="damage-layer" aria-hidden="true"></div>
+      <div id="damageLayer" class="damage-layer" aria-hidden="true" data-active-ui="true"></div>
     </main>
 
+    <script src="/common/session-manager.js"></script>
+    <script src="/common/colyseus-client.js"></script>
     <script src="/kaiju/app.js"></script>
     <audio id="coinDropAudio" preload="auto"></audio>
   </body>

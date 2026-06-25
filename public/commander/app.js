@@ -2,6 +2,7 @@
   const state = {
     room: null,
     status: null,
+    phase: "WAITING",
     matchStartedAt: 0,
     alertModeManual: false,
     alertModeAuto: false,
@@ -11,8 +12,13 @@
   const playerNameEl = document.getElementById("playerName");
   const cityNameEl = document.getElementById("cityName");
   const createJoinButtonEl = document.getElementById("createJoinButton");
+  const startMatchButtonEl = document.getElementById("startMatchButton");
+  const lobbyPhasePanelEl = document.getElementById("lobbyPhasePanel");
+  const lobbyPhaseStatusEl = document.getElementById("lobbyPhaseStatus");
+  const lobbyRosterEl = document.getElementById("lobbyRoster");
   const connectionStateEl = document.getElementById("connectionState");
   const signalFeedEl = document.getElementById("signalFeed");
+  const tacticFeedInlineEl = document.getElementById("tacticFeedInline");
   const dispatchResultsEl = document.getElementById("dispatchResults");
   const assetStatusEl = document.getElementById("assetStatus");
   const targetIdEl = document.getElementById("targetId");
@@ -22,9 +28,7 @@
   const selectedTargetEl = document.getElementById("selectedTarget");
   const alertModeToggleEl = document.getElementById("alertModeToggle");
   const alertModeStateEl = document.getElementById("alertModeState");
-  const matchElapsedEl = document.getElementById("matchElapsed");
-  const etaToBaseEl = document.getElementById("etaToBase");
-  const timelineFeedEl = document.getElementById("timelineFeed");
+  const activeUiEls = Array.from(document.querySelectorAll("[data-active-ui='true']"));
 
   // --- COMMAND MAP ---
   // Seattle metro bounding box: game coords (0-100) map to this lat/lng region.
@@ -338,67 +342,94 @@
     connectionStateEl.className = `status ${className || ""}`.trim();
   }
 
-  function formatDuration(ms) {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
+  function updatePhaseUi() {
+    const isActive = state.phase === "ACTIVE";
+    const isLobby = state.phase === "LOBBY";
 
-  function appendTimelineEntry(message) {
-    if (!timelineFeedEl) {
-      return;
-    }
-    const li = document.createElement("li");
-    li.className = "nominal";
-    li.textContent = `${new Date(Date.now()).toLocaleTimeString()} :: ${message}`;
-    timelineFeedEl.prepend(li);
-    if (timelineFeedEl.children.length > 30) {
-      timelineFeedEl.removeChild(timelineFeedEl.lastChild);
-    }
-  }
+    activeUiEls.forEach((element) => {
+      element.style.display = isActive ? "" : "none";
+    });
 
-  function computeNearestThreatEtaSeconds() {
-    if (!mapData.leviathans.length) {
-      return null;
+    if (lobbyPhasePanelEl) {
+      lobbyPhasePanelEl.style.display = isLobby ? "" : "none";
     }
 
-    const activeThreats = mapData.leviathans.filter((lev) => lev.status !== "CONTAINED");
-    if (!activeThreats.length) {
-      return null;
-    }
-
-    const byDistance = activeThreats
-      .map((lev) => {
-        const dx = lev.x - mapData.cityBase.x;
-        const dy = lev.y - mapData.cityBase.y;
-        const distance = Math.hypot(dx, dy);
-        return { lev, distance };
-      })
-      .sort((a, b) => a.distance - b.distance)[0];
-
-    if (!byDistance || byDistance.distance <= 0) {
-      return 0;
-    }
-
-    // Deterministic UI-only ETA estimate in game-space units.
-    const unitsPerSecond = 1.6;
-    return Math.ceil(byDistance.distance / unitsPerSecond);
-  }
-
-  function renderTimeline() {
-    if (matchElapsedEl) {
-      if (state.matchStartedAt > 0) {
-        matchElapsedEl.textContent = formatDuration(Date.now() - state.matchStartedAt);
+    if (lobbyPhaseStatusEl) {
+      if (isLobby) {
+        lobbyPhaseStatusEl.textContent = "Lobby ready. Commander can start the match.";
+      } else if (isActive) {
+        lobbyPhaseStatusEl.textContent = "Match active.";
       } else {
-        matchElapsedEl.textContent = "00:00";
+        lobbyPhaseStatusEl.textContent = "Waiting for kaiju pilot to join...";
       }
     }
 
-    if (etaToBaseEl) {
-      const etaSeconds = computeNearestThreatEtaSeconds();
-      etaToBaseEl.textContent = etaSeconds == null ? "N/A" : `${etaSeconds}s`;
+    if (startMatchButtonEl) {
+      startMatchButtonEl.style.display = isLobby ? "" : "none";
+      startMatchButtonEl.disabled = !isLobby || !state.room;
     }
+  }
+
+  function renderLobbyRoster() {
+    if (!lobbyRosterEl || !state.room?.state?.leviathans) {
+      return;
+    }
+
+    lobbyRosterEl.innerHTML = "";
+    const commanderName = (state.room.state.commander?.playerName || "Commander").trim() || "Commander";
+    const commanderItem = document.createElement("li");
+    commanderItem.textContent = `Commander: ${commanderName}`;
+    lobbyRosterEl.appendChild(commanderItem);
+
+    state.room.state.leviathans.forEach((leviathan) => {
+      if (!leviathan.playerId || leviathan.isAI) {
+        return;
+      }
+
+      const item = document.createElement("li");
+      const pilotName = (leviathan.playerName || "Kaiju Pilot").trim() || "Kaiju Pilot";
+      item.textContent = `Kaiju: ${pilotName} (${leviathan.name})`;
+      lobbyRosterEl.appendChild(item);
+    });
+  }
+
+  function persistRoomSession(room) {
+    if (!window.KaijuSession || !room) {
+      return;
+    }
+
+    window.KaijuSession.setCurrentMatchId(room.roomId || room.id || "");
+    window.KaijuSession.setReconnectionToken(room.reconnectionToken || "");
+  }
+
+  function routeToLobby(clearMatchSession) {
+    if (window.KaijuSession && clearMatchSession) {
+      window.KaijuSession.clearMatchSession();
+    }
+
+    window.location.assign("/lobby.html");
+  }
+
+  async function leaveExistingRoom() {
+    if (!state.room) {
+      return;
+    }
+
+    try {
+      await state.room.leave();
+    } catch {
+      // best effort room cleanup
+    }
+
+    state.room = null;
+  }
+
+  function appendLocalFeedMessage(message, severity = "nominal") {
+    appendSignal({
+      timestamp: Date.now(),
+      message,
+      severity,
+    });
   }
 
   function updateAutoAlertFromState() {
@@ -425,7 +456,7 @@
       alertModeStateEl.textContent = on ? (state.alertModeManual ? "MANUAL" : "AUTO") : "NOMINAL";
     }
     if (reason && wasOn !== on) {
-      appendTimelineEntry(reason);
+      appendLocalFeedMessage(reason, on ? "alert" : "nominal");
     }
   }
 
@@ -444,7 +475,14 @@
     if (signalFeedEl.children.length > 40) {
       signalFeedEl.removeChild(signalFeedEl.lastChild);
     }
-    // Typewriter / teletype reveal
+    
+    // Update tactical HUD feed inline display with latest signal (no typewriter)
+    if (tacticFeedInlineEl) {
+      tacticFeedInlineEl.textContent = `${entry.message}`;
+      tacticFeedInlineEl.className = entry.severity || "nominal";
+    }
+    
+    // Typewriter / teletype reveal for main feed
     let charIndex = 0;
     const interval = setInterval(() => {
       li.textContent = fullText.slice(0, charIndex + 1);
@@ -453,8 +491,6 @@
         clearInterval(interval);
       }
     }, 18);
-
-    appendTimelineEntry(entry.message);
   }
 
   function appendDispatchResult(entry) {
@@ -489,7 +525,6 @@
 
     updateAutoAlertFromState();
     reconcileAlertMode();
-    renderTimeline();
   }
 
   function refreshTargets() {
@@ -526,7 +561,7 @@
     }
     targetIdEl.value = leviathanId;
     state.room.send("commander.select", { leviathanId });
-    appendTimelineEntry(`TARGET LOCK ${leviathanId} (${source})`);
+    appendLocalFeedMessage(`TARGET LOCK ${leviathanId} (${source})`);
   }
 
   async function loadCities() {
@@ -540,6 +575,69 @@
       cityNameEl.appendChild(option);
     });
     cityNameEl.value = payload.defaultCity;
+  }
+
+  function bindRoomHandlers(room) {
+    state.room = room;
+    persistRoomSession(room);
+
+    if (room.state?.metadata?.state) {
+      state.phase = room.state.metadata.state;
+    }
+    updatePhaseUi();
+    refreshTargets();
+    renderLobbyRoster();
+
+    room.onStateChange(() => {
+      if (room.state?.metadata?.state) {
+        state.phase = room.state.metadata.state;
+      }
+      refreshTargets();
+      updateMapState();
+      updateAutoAlertFromState();
+      renderLobbyRoster();
+      updatePhaseUi();
+      reconcileAlertMode();
+    });
+
+    room.onMessage("match.phase", (payload) => {
+      if (!payload?.phase) {
+        return;
+      }
+
+      state.phase = payload.phase;
+      updatePhaseUi();
+      if (payload.phase === "ACTIVE") {
+        appendLocalFeedMessage("MATCH ACTIVE");
+      }
+    });
+
+    room.onMessage("signal.feed", (payload) => {
+      appendSignal(payload);
+    });
+
+    room.onMessage("commander.status", (payload) => {
+      renderCommanderStatus(payload);
+    });
+
+    room.onMessage("match.start", (payload) => {
+      if (payload?.startedAt) {
+        state.matchStartedAt = payload.startedAt;
+      }
+      state.phase = "ACTIVE";
+      updatePhaseUi();
+      appendLocalFeedMessage("MATCH START CONFIRMED");
+    });
+
+    room.onMessage("commander.dispatch.result", (payload) => {
+      appendDispatchResult(payload);
+    });
+
+    room.onLeave(() => {
+      updateConnectionState("OFFLINE", "critical");
+    });
+
+    updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
   }
 
   async function createAndJoinAsCommander() {
@@ -574,39 +672,42 @@
 
     const client = new window.Colyseus.Client(endpoint);
     const room = await client.consumeSeatReservation(seatReservation);
+    bindRoomHandlers(room);
+  }
 
-    state.room = room;
-    refreshTargets();
+  async function reconnectOrJoinFromSession() {
+    if (!window.KaijuSession || !window.KaijuColyseusClient) {
+      await createAndJoinAsCommander();
+      return;
+    }
 
-    room.onStateChange(() => {
-      refreshTargets();
-      updateMapState();
-      updateAutoAlertFromState();
-      reconcileAlertMode();
-      renderTimeline();
-    });
+    const entrySession = window.KaijuSession.getEntrySession();
+    if (entrySession.playerName) {
+      playerNameEl.value = entrySession.playerName;
+    }
 
-    room.onMessage("signal.feed", (payload) => {
-      appendSignal(payload);
-    });
+    const currentMatchId = window.KaijuSession.getCurrentMatchId();
+    const reconnectToken = window.KaijuSession.getReconnectionToken();
 
-    room.onMessage("commander.status", (payload) => {
-      renderCommanderStatus(payload);
-    });
+    if (!currentMatchId || !reconnectToken) {
+      await createAndJoinAsCommander();
+      return;
+    }
 
-    room.onMessage("match.start", (payload) => {
-      if (payload?.startedAt) {
-        state.matchStartedAt = payload.startedAt;
-      }
-      appendTimelineEntry("MATCH START CONFIRMED");
-      renderTimeline();
-    });
+    updateConnectionState("RECONNECTING", "alert");
+    const client = window.KaijuColyseusClient.createClient();
 
-    room.onMessage("commander.dispatch.result", (payload) => {
-      appendDispatchResult(payload);
-    });
-
-    updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
+    try {
+      const room = await window.KaijuColyseusClient.joinMatchById(client, currentMatchId, {
+        playerName: (playerNameEl.value || "Commander").trim(),
+        role: "commander",
+        reconnectToken,
+      });
+      bindRoomHandlers(room);
+    } catch {
+      await leaveExistingRoom();
+      routeToLobby(true);
+    }
   }
 
   function sendDispatch(assetName) {
@@ -645,6 +746,17 @@
       createJoinButtonEl.disabled = false;
     }
   });
+
+  if (startMatchButtonEl) {
+    startMatchButtonEl.addEventListener("click", () => {
+      if (!state.room || state.phase !== "LOBBY") {
+        return;
+      }
+
+      state.room.send("commander.start", {});
+      appendLocalFeedMessage("START SIGNAL SENT", "alert");
+    });
+  }
 
   document.querySelectorAll("[data-asset]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -695,11 +807,12 @@
   if (state.matchStartedAt <= 0) {
     state.matchStartedAt = Date.now();
   }
-  setInterval(renderTimeline, 1000);
-  renderTimeline();
+  updatePhaseUi();
   reconcileAlertMode();
 
-  loadCities().catch(() => {
-    updateConnectionState("OFFLINE", "critical");
-  });
+  loadCities()
+    .then(() => reconnectOrJoinFromSession())
+    .catch(() => {
+      updateConnectionState("OFFLINE", "critical");
+    });
 })();

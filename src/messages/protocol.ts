@@ -27,7 +27,9 @@ export interface CommanderDispatchMessage {
 
 export interface KaijuMoveMessage {
   type: "kaiju.move";
-  heading: number; // 0–360 degrees, or vector
+  heading?: number; // 0–360 degrees fallback
+  moveX?: number; // normalized movement vector X (-1 to 1)
+  moveY?: number; // normalized movement vector Y (-1 to 1)
 }
 
 export interface KaijuAttackMessage {
@@ -223,8 +225,20 @@ export function validateKaijuMove(msg: unknown): msg is KaijuMoveMessage {
   if (!msg || typeof msg !== "object") {
     return false;
   }
+
   const m = msg as Record<string, unknown>;
-  return m.type === "kaiju.move" && typeof m.heading === "number";
+  if (m.type !== "kaiju.move") {
+    return false;
+  }
+
+  const hasHeading = typeof m.heading === "number" && Number.isFinite(m.heading as number);
+  const hasVector =
+    typeof m.moveX === "number" &&
+    Number.isFinite(m.moveX as number) &&
+    typeof m.moveY === "number" &&
+    Number.isFinite(m.moveY as number);
+
+  return hasHeading || hasVector;
 }
 
 export function validateKaijuAttack(msg: unknown): msg is KaijuAttackMessage {

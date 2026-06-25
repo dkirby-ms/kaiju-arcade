@@ -8,6 +8,10 @@ jest.mock("colyseus", () => {
       // no-op for unit tests
     }
 
+    setMetadata(_metadata: unknown): void {
+      // no-op for unit tests
+    }
+
     disconnect(): void {
       // no-op for unit tests
     }
@@ -56,6 +60,14 @@ describe("MatchRoom role assignment", () => {
     expect(room.state.leviathans.length).toBe(4);
     expect(room.state.leviathans.some((leviathan: LeviathanSchema) => leviathan.playerId === "session-2")).toBe(true);
     expect(room.state.leviathans.filter((leviathan: LeviathanSchema) => leviathan.isAI).length).toBe(3);
+    expect(room.state.metadata.state).toBe("LOBBY");
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     expect(room.state.metadata.state).toBe("ACTIVE");
 
     room.onDispose();
@@ -281,6 +293,12 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     const matchStartSignal = room.state.signalFeed.find(
       (signal: { message: string }) => signal.message === "MATCH START"
     );
@@ -300,6 +318,12 @@ describe("MatchRoom role assignment", () => {
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
     );
 
     const targetLeviathan = room.state.leviathans.find(
@@ -358,26 +382,34 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
     expect(kaiju).toBeDefined();
 
     (room as unknown as {
       handleClientMessage: (
         client: { sessionId: string },
-        message: { type: string; heading?: number; abilityId?: string }
+        message: { type: string; heading?: number; moveX?: number; moveY?: number; abilityId?: string }
       ) => void;
     }).handleClientMessage(
       { sessionId: "session-2" },
-      { type: "kaiju.move", heading: 270 }
+      { type: "kaiju.move", moveX: 0, moveY: 1 }
     );
 
-    expect(kaiju?.heading).toBe(270);
+    expect(kaiju?.heading).toBe(90);
+    expect(kaiju?.moveX).toBe(0);
+    expect(kaiju?.moveY).toBe(1);
 
     kaiju!.archetype = "Sniper";
     (room as unknown as {
       handleClientMessage: (
         client: { sessionId: string },
-        message: { type: string; heading?: number; abilityId?: string }
+        message: { type: string; heading?: number; moveX?: number; moveY?: number; abilityId?: string }
       ) => void;
     }).handleClientMessage(
       { sessionId: "session-2" },
@@ -409,6 +441,12 @@ describe("MatchRoom role assignment", () => {
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
     );
 
     const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
@@ -447,6 +485,12 @@ describe("MatchRoom role assignment", () => {
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
     );
 
     const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
@@ -493,6 +537,12 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Kaiju One" }
     );
 
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
     const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
     expect(kaiju).toBeDefined();
 
@@ -532,6 +582,12 @@ describe("MatchRoom role assignment", () => {
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
     );
 
     const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
@@ -585,6 +641,12 @@ describe("MatchRoom role assignment", () => {
     room.onJoin(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       { playerName: "Kaiju One" }
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
     );
 
     expect(broadcast).toHaveBeenCalledWith(
@@ -695,5 +757,77 @@ describe("MatchRoom role assignment", () => {
 
       room.onDispose();
     }
+  });
+
+  it("enters LOBBY before ACTIVE and broadcasts match phase transitions", () => {
+    const room = new MatchRoom();
+    const broadcast = jest.fn();
+    (room as unknown as { broadcast: typeof broadcast }).broadcast = broadcast;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
+    );
+
+    expect(room.state.metadata.state).toBe("LOBBY");
+    expect(broadcast).toHaveBeenCalledWith(
+      "match.phase",
+      expect.objectContaining({
+        type: "match.phase",
+        phase: "LOBBY",
+      })
+    );
+
+    (room as unknown as {
+      handleCommanderStart: (client: { sessionId: string }) => void;
+    }).handleCommanderStart(
+      { sessionId: "session-1" },
+    );
+
+    expect(room.state.metadata.state).toBe("ACTIVE");
+    expect(broadcast).toHaveBeenCalledWith(
+      "match.phase",
+      expect.objectContaining({
+        type: "match.phase",
+        phase: "ACTIVE",
+      })
+    );
+
+    room.onDispose();
+  });
+
+  it("stores player role and name from join options when metadata updates", () => {
+    const room = new MatchRoom();
+    const setMetadata = jest.fn();
+    (room as unknown as { setMetadata: typeof setMetadata }).setMetadata = setMetadata;
+
+    room.onCreate({ cityName: "Neo Tokyo" });
+    room.onJoin(
+      { id: "client-1", sessionId: "session-1" } as unknown as never,
+      { playerName: "Commander One", playerRole: "COMMANDER" }
+    );
+    room.onJoin(
+      { id: "client-2", sessionId: "session-2" } as unknown as never,
+      { playerName: "Kaiju One", playerRole: "KAIJU" }
+    );
+
+    expect(room.state.commander.playerName).toBe("Commander One");
+    const kaiju = room.state.leviathans.find((leviathan: LeviathanSchema) => leviathan.playerId === "session-2");
+    expect(kaiju?.playerName).toBe("Kaiju One");
+    expect(setMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "lobby",
+        playerCount: 2,
+        commanderName: "Commander One",
+      })
+    );
+
+    room.onDispose();
   });
 });

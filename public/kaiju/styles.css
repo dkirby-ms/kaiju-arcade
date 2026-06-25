@@ -1,6 +1,7 @@
 :root {
   --bg: #030607;
   --panel: rgba(11, 20, 22, 0.9);
+  --panel-opacity: 0.9;
   --line: #1f3740;
   --teal: #0de3d0;
   --mint: #84ffc5;
@@ -26,48 +27,34 @@ body {
 }
 
 .hud-shell {
-  width: min(980px, 96vw);
-  margin: 0 auto;
-  padding: 0.85rem 0 1rem;
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
   display: grid;
-  gap: 0.65rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "map";
 }
 
 .panel {
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) calc(var(--panel-opacity) * 100%), transparent);
   backdrop-filter: blur(2px);
   padding: 0.72rem;
   box-shadow: inset 0 0 26px rgba(13, 227, 208, 0.05);
 }
 
 .hud-header {
-  grid-column: 1 / -1;
+  position: absolute;
+  top: 0.85rem;
+  left: 0.85rem;
+  z-index: 6;
+  width: min(360px, calc(100vw - 1.7rem));
   text-transform: uppercase;
   letter-spacing: 0.12em;
-}
-
-.context-switcher {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.45rem;
-  padding: 0.45rem;
-}
-
-.context-button {
-  border: 1px solid #1e3f47;
-  background: #071419;
-  color: var(--muted);
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-}
-
-.context-button.active {
-  border-color: var(--teal);
-  color: var(--text);
-  box-shadow: 0 0 10px rgba(13, 227, 208, 0.28);
 }
 
 .hud-header h1 {
@@ -81,6 +68,29 @@ body {
   margin: 0.24rem 0 0;
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.hud-opacity-row {
+  margin-top: 0.52rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.hud-opacity-row label {
+  margin: 0;
+  font-size: 0.64rem;
+}
+
+#hudOpacityControl {
+  padding: 0;
+  background: transparent;
+}
+
+#hudOpacityValue {
+  font-size: 0.68rem;
+  color: var(--mint);
 }
 
 .panel h2 {
@@ -135,6 +145,21 @@ button.secondary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.4rem;
+}
+
+.session-panel {
+  position: absolute;
+  top: 5.9rem;
+  left: 0.85rem;
+  z-index: 6;
+  width: min(360px, calc(100vw - 1.7rem));
+}
+
+.session-guidance {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
 }
 
 .status {
@@ -308,6 +333,29 @@ button.secondary {
   gap: 0.45rem;
 }
 
+.direction-cluster {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.direction-cluster #moveUpButton {
+  grid-column: 2;
+}
+
+.direction-cluster #moveLeftButton {
+  grid-column: 1;
+}
+
+.direction-cluster #moveDownButton {
+  grid-column: 2;
+}
+
+.direction-cluster #moveRightButton {
+  grid-column: 3;
+}
+
 .ability {
   font-weight: 700;
 }
@@ -387,15 +435,77 @@ button.secondary {
   display: none;
 }
 
+.stats-panel {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 6;
+  width: min(360px, calc(100vw - 1.7rem));
+}
+
+.action-panel {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 6;
+  width: min(360px, calc(100vw - 1.7rem));
+}
+
+.feed-panel {
+  position: absolute;
+  left: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 6;
+  width: min(430px, calc(100vw - 1.7rem));
+  max-height: min(34vh, 320px);
+}
+
 .spectator-panel {
-  grid-column: 1 / -1;
+  position: absolute;
+  right: 0.85rem;
+  bottom: 18.9rem;
+  z-index: 7;
+  width: min(360px, calc(100vw - 1.7rem));
 }
 
 .map-panel {
-  grid-column: 1 / -1;
+  grid-area: map;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: rgba(2, 7, 9, 0.84);
   box-shadow:
-    0 0 14px rgba(13, 227, 208, 0.08),
-    inset 0 0 26px rgba(13, 227, 208, 0.05);
+    inset 0 0 40px rgba(13, 227, 208, 0.08);
+}
+
+.map-panel h2 {
+  position: absolute;
+  top: 0.85rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.24rem 0.55rem;
+  border: 1px solid #1f3740;
+  background: rgba(7, 15, 18, 0.78);
+  z-index: 5;
+}
+
+.map-attack-hint {
+  position: absolute;
+  top: 2.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  z-index: 5;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--teal);
+  padding: 0.22rem 0.5rem;
+  border: 1px solid #1f3740;
+  background: rgba(7, 15, 18, 0.72);
 }
 
 .spectator-subline {
@@ -408,9 +518,9 @@ button.secondary {
 .spectator-map-shell {
   position: relative;
   width: 100%;
-  height: 280px;
-  margin-top: 0.6rem;
-  border: 1px solid #17323a;
+  height: 100%;
+  margin-top: 0;
+  border: none;
   overflow: hidden;
   background: #061013;
 }
@@ -419,6 +529,25 @@ button.secondary {
   position: absolute;
   inset: 0;
   z-index: 1;
+}
+
+#mapClickLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.map-click-ping {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border: 2px solid var(--orange);
+  border-radius: 999px;
+  box-shadow: 0 0 16px rgba(255, 143, 63, 0.75);
+  animation: map-click-ping 520ms ease-out forwards;
 }
 
 #spectatorLeafletMap .leaflet-tile-pane {
@@ -431,14 +560,14 @@ button.secondary {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 2;
+  z-index: 4;
 }
 
 ul {
   margin: 0.55rem 0 0;
   padding: 0;
   list-style: none;
-  max-height: 190px;
+  max-height: min(22vh, 230px);
   overflow: auto;
 }
 
@@ -631,16 +760,69 @@ li.critical {
   }
 }
 
+@keyframes map-click-ping {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(4.6);
+    opacity: 0;
+  }
+}
+
 @media (max-width: 880px) {
   .hud-shell {
     grid-template-columns: 1fr;
+    grid-template-areas: "map";
   }
 
-  .context-switcher {
-    position: sticky;
-    top: 0.4rem;
-    z-index: 8;
-    background: rgba(6, 12, 14, 0.93);
+  .hud-header,
+  .session-panel,
+  .stats-panel,
+  .action-panel,
+  .feed-panel,
+  .spectator-panel {
+    position: static;
+    width: auto;
+    margin: 0;
+  }
+
+  .hud-shell {
+    height: auto;
+    min-height: 100vh;
+    padding: 0.7rem;
+    gap: 0.55rem;
+    grid-template-areas:
+      "map"
+      "header"
+      "session"
+      "status"
+      "actions"
+      "spectator"
+      "feed";
+  }
+
+  .map-panel {
+    border: 1px solid var(--line);
+    border-radius: 0;
+    min-height: 60vh;
+    height: 60vh;
+    padding-top: 4.2rem;
+  }
+
+  .map-panel h2,
+  .map-attack-hint {
+    left: 0.7rem;
+    transform: none;
+  }
+
+  .map-panel h2 {
+    top: 0.7rem;
+  }
+
+  .map-attack-hint {
+    top: 2.55rem;
   }
 
   .mode-row {
@@ -650,6 +832,6 @@ li.critical {
   }
 
   .spectator-map-shell {
-    height: 240px;
+    height: 100%;
   }
 }

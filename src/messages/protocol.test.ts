@@ -3,6 +3,7 @@ import {
   getCommanderSelectLeviathanId,
   CommanderSelectMessage,
   validateKaijuAbility,
+  validateKaijuMove,
   validateKaijuContinue,
 } from "./protocol";
 
@@ -40,5 +41,12 @@ describe("Commander select protocol", () => {
   it("validates kaiju.continue messages", () => {
     expect(validateKaijuContinue({ type: "kaiju.continue" })).toBe(true);
     expect(validateKaijuContinue({ type: "kaiju.attack" })).toBe(false);
+  });
+
+  it("validates kaiju.move messages with heading or vector payloads", () => {
+    expect(validateKaijuMove({ type: "kaiju.move", heading: 180 })).toBe(true);
+    expect(validateKaijuMove({ type: "kaiju.move", moveX: 1, moveY: 0 })).toBe(true);
+    expect(validateKaijuMove({ type: "kaiju.move", moveX: "1", moveY: 0 })).toBe(false);
+    expect(validateKaijuMove({ type: "kaiju.move" })).toBe(false);
   });
 });
