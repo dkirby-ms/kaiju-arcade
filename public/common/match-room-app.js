@@ -207,7 +207,7 @@
 
     try {
       if (state.room) {
-        await state.room.leave(true);
+        await state.room.leave(false);
       }
     } catch {
       // best-effort room detach before transition

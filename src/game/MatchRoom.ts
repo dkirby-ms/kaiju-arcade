@@ -52,6 +52,7 @@ const COMMANDER_DISPATCH_COOLDOWN_MS: Record<string, number> = {
 };
 
 const COMMANDER_TARGETED_ASSETS = new Set<string>(["Scramble Jets", "Deploy Mechs"]);
+const CONSENTED_CLOSE_CODE = 4000;
 
 type PlayerRole = "COMMANDER" | "KAIJU";
 
@@ -72,28 +73,6 @@ interface MatchResultSummary {
 }
 
 type MatchResultOutcome = "kaiju-victory" | "commander-victory" | "time-limit" | "aborted";
-
-interface ReconnectGraceWindow {
-  leviathanId: string;
-  reconnectToken: string;
-  timeoutId: NodeJS.Timeout;
-  expiresAt: number;
-}
-
-interface ReconnectTokenPayload {
-  type: "match.reconnect.token";
-  role: "COMMANDER" | "KAIJU";
-  leviathanId: string;
-  reconnectToken: string;
-  graceWindowMs: number;
-}
-
-interface CommanderReconnectWindow {
-  reconnectToken: string;
-  expiresAt: number;
-  timeoutId: NodeJS.Timeout;
-  playerName: string;
-}
 
 interface JoinRejectionTelemetry {
   type: "match.join.rejected";
@@ -118,13 +97,9 @@ interface RejectionCapableClient {
 
 export class MatchRoom extends Room<MatchSchema> {
   private static readonly MAX_KAIJU_SLOTS = 4;
-  private static readonly RECONNECT_GRACE_MS = 30_000;
   private static readonly ROOM_FULL_CLOSE_CODE = 1008;
 
   private playerSessions: Map<string, PlayerSession> = new Map();
-  private reconnectGraceWindows: Map<string, ReconnectGraceWindow> = new Map();
-  private reconnectTokenByLeviathanId: Map<string, string> = new Map();
-  private commanderReconnectWindow?: CommanderReconnectWindow;
   private tickIntervalId?: NodeJS.Timeout;
   private lastTickTime: number = 0;
   private tickDeltaMs: number = 0;
@@ -209,30 +184,12 @@ export class MatchRoom extends Room<MatchSchema> {
   onJoin(client: Client, options?: Record<string, unknown>) {
     const joinSpan = startSpan("room.join");
 
-    // Drain guard: reject new joins when draining; allow reconnects through.
-    if (isDraining() && typeof options?.reconnectToken !== "string") {
+    // Drain guard: reject new joins when draining
+    if (isDraining()) {
       const drainClient = client as unknown as RejectionCapableClient;
       if (typeof drainClient.leave === "function") {
         drainClient.leave(1013, "Server draining, please reconnect to another instance");
       }
-      return;
-    }
-
-    const requestedRole =
-      typeof options?.role === "string"
-        ? options.role.toUpperCase()
-        : typeof options?.playerRole === "string"
-          ? options.playerRole.toUpperCase()
-          : undefined;
-    const hasRequestedRole = requestedRole !== undefined;
-
-    if (
-      hasRequestedRole &&
-      requestedRole !== "COMMANDER" &&
-      requestedRole !== "KAIJU"
-    ) {
-      this.emitJoinRejectionTelemetry(client, "invalid-role");
-      this.rejectJoin(client, "Role must be commander or kaiju");
       return;
     }
 
@@ -248,19 +205,21 @@ export class MatchRoom extends Room<MatchSchema> {
     this.playerSessions.set(client.sessionId, session);
     this.addParticipant(session);
 
-    const reconnectToken =
-      typeof options?.reconnectToken === "string" ? options.reconnectToken : undefined;
-    console.log(`[TOKEN] onJoin received reconnectToken=${reconnectToken ? reconnectToken.slice(0, 8) : 'UNDEFINED'}, full options:`, JSON.stringify(options));
-    if (reconnectToken) {
-      if (this.tryReclaimCommanderSession(client, session, reconnectToken)) {
-        this.refreshLobbyMetadata();
-        this.reconcileLobbyPhase();
-        return;
-      }
+    // Parse requested role
+    const requestedRole =
+      typeof options?.role === "string"
+        ? options.role.toUpperCase()
+        : typeof options?.playerRole === "string"
+          ? options.playerRole.toUpperCase()
+          : undefined;
 
-      this.tryReclaimKaijuSession(client, session, reconnectToken);
+    if (requestedRole && requestedRole !== "COMMANDER" && requestedRole !== "KAIJU") {
+      this.emitJoinRejectionTelemetry(client, "invalid-role");
+      this.rejectJoin(client, "Role must be commander or kaiju");
+      return;
     }
 
+    // If a role was requested, try to claim it
     if (requestedRole === "COMMANDER" || requestedRole === "KAIJU") {
       const claimed = this.handleRoleClaim(client, session, requestedRole);
       if (!claimed) {
@@ -270,6 +229,13 @@ export class MatchRoom extends Room<MatchSchema> {
         this.emitJoinRejectionTelemetry(client, "capacity");
         this.rejectJoin(client, rejectionReason);
         return;
+      }
+
+      // Store role in userData so it persists across reconnections
+      client.userData = client.userData || {};
+      client.userData.role = requestedRole;
+      if (requestedRole === "KAIJU" && session.leviathanId) {
+        client.userData.leviathanId = session.leviathanId;
       }
     }
 
@@ -289,9 +255,10 @@ export class MatchRoom extends Room<MatchSchema> {
     }
   }
 
-  onLeave(client: Client, code?: number) {
+  async onLeave(client: Client, code?: number) {
     logger.info("client.leave", { roomId: this.roomId, code: code ?? 0 });
-    incCounter("kaiju_disconnect_total", { code: code === 1000 ? "graceful" : "abrupt" });
+    const consented = code === CONSENTED_CLOSE_CODE;
+    incCounter("kaiju_disconnect_total", { code: consented ? "graceful" : "abrupt" });
     setGauge("kaiju_active_players", Math.max(0, (this.clients?.length ?? 1) - 1));
 
     const session = this.playerSessions.get(client.sessionId);
@@ -299,28 +266,34 @@ export class MatchRoom extends Room<MatchSchema> {
       return;
     }
 
-    if (session.role === "COMMANDER") {
-      this.emitSignal("COMMANDER OFFLINE - ATTEMPTING RECOVERY", "critical", "SYSTEM");
-      const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
-      const shouldAttemptReconnect = disconnectedAbruptly || this.state.metadata.state === "ACTIVE";
-      if (shouldAttemptReconnect) {
-        this.startCommanderReconnectWindow(session);
-      } else {
-        this.releaseCommanderClaim(session, false);
-      }
-    } else if (session.role === "KAIJU" && session.leviathanId) {
-      const leviathan = this.state.getLeviathan(session.leviathanId);
-      if (leviathan) {
-        const hasReconnectCredits = leviathan.credits > 0;
-        const disconnectedAbruptly = typeof code !== "number" || code !== 1000;
-        const canGraceReconnect = (disconnectedAbruptly || this.state.metadata.state === "ACTIVE") && hasReconnectCredits;
-
-        if (canGraceReconnect) {
-          this.startReconnectGraceWindow(leviathan, session);
-        } else {
-          this.releaseKaijuClaim(session, false);
+    // Standard Colyseus reconnection flow for unexpected disconnects.
+    if (!consented) {
+      if (session.role === "COMMANDER") {
+        this.emitSignal("COMMANDER OFFLINE - RECONNECTION WINDOW ACTIVE", "critical", "SYSTEM");
+      } else if (session.role === "KAIJU" && session.leviathanId) {
+        const leviathan = this.state.getLeviathan(session.leviathanId);
+        if (leviathan && leviathan.credits > 0) {
+          this.emitSignal(
+            `KAIJU ${leviathan.name} OFFLINE - RECONNECTION WINDOW ACTIVE`,
+            "critical",
+            "SYSTEM"
+          );
         }
       }
+
+      try {
+        await this.allowReconnection(client, 30);
+        return;
+      } catch {
+        // Grace window elapsed; proceed with normal cleanup.
+      }
+    }
+
+    // Player intentionally left or reconnection window expired, clean up.
+    if (session.role === "COMMANDER") {
+      this.releaseCommanderClaim(session, false);
+    } else if (session.role === "KAIJU" && session.leviathanId) {
+      this.releaseKaijuClaim(session, false);
     }
 
     this.removeParticipant(client.sessionId);
@@ -330,16 +303,38 @@ export class MatchRoom extends Room<MatchSchema> {
     this.disconnectIfIdle();
   }
 
-  private hasPendingReconnectWindows(): boolean {
-    return this.reconnectGraceWindows.size > 0 || Boolean(this.commanderReconnectWindow);
-  }
+  onReconnect(client: Client) {
+    logger.info("client.reconnect", { roomId: this.roomId, sessionId: client.sessionId });
 
-  private disconnectIfIdle() {
-    if (this.playerSessions.size > 0) {
+    const session = this.playerSessions.get(client.sessionId);
+    if (!session) {
       return;
     }
 
-    if (this.hasPendingReconnectWindows()) {
+    // Player successfully reconnected - restore state
+    if (session.role === "COMMANDER") {
+      this.emitSignal("COMMANDER ONLINE - SESSION RESTORED", "nominal", "SYSTEM");
+    } else if (session.role === "KAIJU" && session.leviathanId) {
+      const leviathan = this.state.getLeviathan(session.leviathanId);
+      if (leviathan) {
+        leviathan.isAI = false;
+        leviathan.moveX = 0;
+        leviathan.moveY = 0;
+        this.emitSignal(`KAIJU ${leviathan.name} ONLINE - SESSION RESTORED`, "nominal", "SYSTEM");
+      }
+    }
+
+    // Ensure participant is in the state
+    if (!this.state.getParticipant(client.sessionId)) {
+      this.addParticipant(session);
+    }
+
+    this.refreshLobbyMetadata();
+  }
+
+  private disconnectIfIdle() {
+    // Disconnect only if no active player sessions
+    if (this.playerSessions.size > 0) {
       return;
     }
 
@@ -495,7 +490,7 @@ export class MatchRoom extends Room<MatchSchema> {
     }
   }
 
-  private handleRoleClaim(client: Client, session: PlayerSession, role: PlayerRole): boolean {
+  private handleRoleClaim(_client: Client, session: PlayerSession, role: PlayerRole): boolean {
     if (this.state.metadata.state === "ACTIVE" || this.state.metadata.state === "ENDED") {
       return false;
     }
@@ -532,14 +527,10 @@ export class MatchRoom extends Room<MatchSchema> {
       return false;
     }
 
-    console.log(`[TOKEN] handleRoleClaim: Kaiju slot claimed for ${session.playerName}, leviathanId=${leviathan.id}`);
     session.role = "KAIJU";
     session.ready = false;
     session.leviathanId = leviathan.id;
     this.syncParticipant(session);
-    console.log(`[TOKEN] handleRoleClaim: About to call sendReconnectToken for leviathanId=${leviathan.id}`);
-    this.sendReconnectToken(client, leviathan.id);
-    console.log(`[TOKEN] handleRoleClaim: sendReconnectToken completed`);
     this.refreshLobbyMetadata();
     this.emitSignal(`KAIJU ${leviathan.name} PILOT ENGAGED`, "nominal", "SYSTEM");
     return true;
@@ -848,179 +839,6 @@ export class MatchRoom extends Room<MatchSchema> {
     return slot;
   }
 
-  private tryReclaimKaijuSession(client: Client, session: PlayerSession, reconnectToken: string) {
-    const leviathan = this.reclaimKaijuGraceSlot(reconnectToken, client.sessionId, session.playerName);
-    if (!leviathan) {
-      return;
-    }
-
-    session.role = "KAIJU";
-    session.leviathanId = leviathan.id;
-    session.ready = leviathan.ready;
-    this.syncParticipant(session);
-    this.sendReconnectToken(client, leviathan.id);
-  }
-
-  private tryReclaimCommanderSession(client: Client, session: PlayerSession, reconnectToken: string): boolean {
-    if (!this.commanderReconnectWindow) {
-      return false;
-    }
-
-    if (this.commanderReconnectWindow.reconnectToken !== reconnectToken) {
-      return false;
-    }
-
-    clearTimeout(this.commanderReconnectWindow.timeoutId);
-    this.commanderReconnectWindow = undefined;
-
-    session.role = "COMMANDER";
-    session.ready = this.state.commander.ready;
-    session.leviathanId = undefined;
-    this.state.commander.playerId = session.sessionId;
-    this.state.commander.playerName = session.playerName;
-    this.syncParticipant(session);
-    this.sendCommanderReconnectToken(client);
-    this.emitSignal(`COMMANDER ${session.playerName.toUpperCase()} RECONNECTED`, "nominal", "SYSTEM");
-    return true;
-  }
-
-  private reclaimKaijuGraceSlot(
-    reconnectToken: string | undefined,
-    sessionId: string,
-    playerName: string
-  ): LeviathanSchema | undefined {
-    if (!reconnectToken) {
-      console.log(`[TOKEN] reclaimKaijuGraceSlot: No reconnectToken provided`);
-      return undefined;
-    }
-
-    console.log(`[TOKEN] reclaimKaijuGraceSlot: Looking for token ${reconnectToken.slice(0, 8)}...`);
-    console.log(`[TOKEN] reclaimKaijuGraceSlot: Grace windows count: ${this.reconnectGraceWindows.size}`);
-    Array.from(this.reconnectGraceWindows.entries()).forEach(([id, window]) => {
-      console.log(`[TOKEN]   Window ${id}: token=${window.reconnectToken.slice(0, 8)}...`);
-    });
-
-    const graceWindow = Array.from(this.reconnectGraceWindows.values()).find(
-      (window: ReconnectGraceWindow) => window.reconnectToken === reconnectToken
-    );
-    if (!graceWindow) {
-      console.log(`[TOKEN] reclaimKaijuGraceSlot: NO MATCHING GRACE WINDOW FOUND`);
-      return undefined;
-    }
-    console.log(`[TOKEN] reclaimKaijuGraceSlot: FOUND matching grace window for leviathan ${graceWindow.leviathanId}`);
-
-    const leviathan = this.state.getLeviathan(graceWindow.leviathanId);
-    if (!leviathan) {
-      return undefined;
-    }
-
-    clearTimeout(graceWindow.timeoutId);
-    this.reconnectGraceWindows.delete(graceWindow.leviathanId);
-
-    leviathan.isAI = false;
-    leviathan.playerId = sessionId;
-    leviathan.playerName = playerName;
-    leviathan.moveX = 0;
-    leviathan.moveY = 0;
-
-    this.emitSignal(
-      `KAIJU ${leviathan.name} RECONNECTED - GRACE RECOVERY SUCCESS`,
-      "nominal",
-      "SYSTEM"
-    );
-
-    return leviathan;
-  }
-
-  private startReconnectGraceWindow(leviathan: LeviathanSchema, session: PlayerSession) {
-    const existingWindow = this.reconnectGraceWindows.get(leviathan.id);
-    if (existingWindow) {
-      clearTimeout(existingWindow.timeoutId);
-      this.reconnectGraceWindows.delete(leviathan.id);
-    }
-
-    // Reuse the token already held by the client (issued when the kaiju slot was claimed).
-    // Generating a new token here would make the grace window unreachable because the
-    // client navigates to /kaiju/index.html carrying the original token and has no way
-    // to receive the newly-issued one before the WebSocket closes.
-    const existingToken = this.reconnectTokenByLeviathanId.get(leviathan.id);
-    console.log(`[TOKEN] startReconnectGraceWindow for ${leviathan.id}: existingToken=${existingToken ? existingToken.slice(0, 8) + '...' : 'NOT FOUND'}`);
-    const reconnectToken = existingToken ?? this.issueReconnectToken(leviathan.id);
-    console.log(`[TOKEN] Grace window will use token: ${reconnectToken.slice(0, 8)}...`);
-
-    console.log(`Kaiju ${leviathan.name} player disconnected - grace window started`);
-    this.emitSignal(
-      `KAIJU ${leviathan.name} CONNECTION LOST - GRACE WINDOW ACTIVE`,
-      "alert",
-      "SYSTEM"
-    );
-
-    const timeoutId = setTimeout(() => {
-      const currentWindow = this.reconnectGraceWindows.get(leviathan.id);
-      if (!currentWindow) {
-        return;
-      }
-
-      const latestLeviathan = this.state.getLeviathan(leviathan.id);
-      if (!latestLeviathan) {
-        this.reconnectGraceWindows.delete(leviathan.id);
-        return;
-      }
-
-      const hasActiveController = latestLeviathan.playerId.length > 0;
-      if (!hasActiveController) {
-        this.promoteSlotToAI(latestLeviathan);
-        this.emitSignal(
-          `KAIJU ${latestLeviathan.name} GRACE WINDOW EXPIRED - AI TAKEOVER`,
-          "alert",
-          "SYSTEM"
-        );
-      }
-
-      this.reconnectGraceWindows.delete(leviathan.id);
-      this.disconnectIfIdle();
-    }, MatchRoom.RECONNECT_GRACE_MS);
-
-    this.reconnectGraceWindows.set(leviathan.id, {
-      leviathanId: leviathan.id,
-      reconnectToken,
-      timeoutId,
-      expiresAt: Date.now() + MatchRoom.RECONNECT_GRACE_MS,
-    });
-
-    leviathan.playerId = "";
-    leviathan.playerName = session.playerName;
-  }
-
-  private startCommanderReconnectWindow(session: PlayerSession) {
-    if (this.commanderReconnectWindow) {
-      clearTimeout(this.commanderReconnectWindow.timeoutId);
-    }
-
-    const reconnectToken = uuid();
-    const timeoutId = setTimeout(() => {
-      if (!this.commanderReconnectWindow) {
-        return;
-      }
-
-      this.commanderReconnectWindow = undefined;
-      this.state.metadata.state = "ENDED";
-      this.state.metadata.outcome = "ABORTED";
-      this.emitSignal("COMMANDER RECONNECT WINDOW EXPIRED - MATCH ABORTED", "critical", "SYSTEM");
-      this.disconnectIfIdle();
-    }, MatchRoom.RECONNECT_GRACE_MS);
-
-    this.commanderReconnectWindow = {
-      reconnectToken,
-      expiresAt: Date.now() + MatchRoom.RECONNECT_GRACE_MS,
-      timeoutId,
-      playerName: session.playerName,
-    };
-
-    this.state.commander.playerId = "";
-    this.sendCommanderReconnectToken();
-  }
-
   private promoteSlotToAI(leviathan: LeviathanSchema) {
     const slotIndex = this.state.leviathans.findIndex((candidate: LeviathanSchema) => candidate.id === leviathan.id);
     leviathan.isAI = true;
@@ -1108,57 +926,6 @@ export class MatchRoom extends Room<MatchSchema> {
     createdParticipant.ready = session.ready;
     createdParticipant.leviathanId = session.leviathanId ?? "";
     return createdParticipant;
-  }
-
-  private issueReconnectToken(leviathanId: string): string {
-    const reconnectToken = uuid();
-    this.reconnectTokenByLeviathanId.set(leviathanId, reconnectToken);
-    console.log(`[TOKEN] Issued new token for ${leviathanId}: ${reconnectToken.slice(0, 8)}...`);
-    return reconnectToken;
-  }
-
-  private sendReconnectToken(client: Client, leviathanId: string) {
-    const reconnectToken = this.issueReconnectToken(leviathanId);
-
-    const payload: ReconnectTokenPayload = {
-      type: "match.reconnect.token",
-      role: "KAIJU",
-      leviathanId,
-      reconnectToken,
-      graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
-    };
-
-    console.log(`[TOKEN] sendReconnectToken: sending token ${reconnectToken.slice(0, 8)}... to client for ${leviathanId}`);
-    if (typeof client.send === "function") {
-      client.send("match.reconnect.token", payload);
-      client.send("kaiju.reconnect.token", payload);
-      console.log(`[TOKEN] sendReconnectToken: messages sent`);
-    } else {
-      console.log(`[TOKEN] sendReconnectToken: client.send is not a function!`);
-    }
-  }
-
-  private sendCommanderReconnectToken(client?: Client) {
-    if (!this.commanderReconnectWindow) {
-      return;
-    }
-
-    const payload: ReconnectTokenPayload = {
-      type: "match.reconnect.token",
-      role: "COMMANDER",
-      leviathanId: "",
-      reconnectToken: this.commanderReconnectWindow.reconnectToken,
-      graceWindowMs: MatchRoom.RECONNECT_GRACE_MS,
-    };
-
-    if (client && typeof client.send === "function") {
-      client.send("match.reconnect.token", payload);
-      return;
-    }
-
-    if (typeof this.broadcast === "function") {
-      this.broadcast("match.reconnect.token", payload);
-    }
   }
 
   private startMatch() {
@@ -1555,15 +1322,5 @@ export class MatchRoom extends Room<MatchSchema> {
     if (this.tickIntervalId) {
       clearInterval(this.tickIntervalId);
     }
-
-    for (const graceWindow of this.reconnectGraceWindows.values()) {
-      clearTimeout(graceWindow.timeoutId);
-    }
-    if (this.commanderReconnectWindow) {
-      clearTimeout(this.commanderReconnectWindow.timeoutId);
-      this.commanderReconnectWindow = undefined;
-    }
-    this.reconnectGraceWindows.clear();
-    this.reconnectTokenByLeviathanId.clear();
   }
 }

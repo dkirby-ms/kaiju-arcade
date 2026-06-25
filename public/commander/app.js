@@ -700,11 +700,7 @@
     const client = window.KaijuColyseusClient.createClient();
 
     try {
-      const room = await window.KaijuColyseusClient.joinMatchById(client, currentMatchId, {
-        playerName: (playerNameEl.value || "Commander").trim(),
-        role: "commander",
-        reconnectToken,
-      });
+      const room = await client.reconnect(reconnectToken);
       bindRoomHandlers(room);
     } catch {
       await leaveExistingRoom();

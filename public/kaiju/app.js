@@ -868,15 +868,43 @@
 
   function findControlledLeviathan() {
     if (!state.room || !state.room.state || !state.room.state.leviathans) {
+      console.log("[findControlledLeviathan] Missing room/state/leviathans");
       return null;
     }
 
     let controlled = null;
+    
+    // First, try to find by matching playerId (primary method)
     state.room.state.leviathans.forEach((leviathan) => {
       if (leviathan.playerId === state.room.sessionId) {
         controlled = leviathan;
       }
     });
+
+    if (controlled) {
+      console.log("[findControlledLeviathan] Found by playerId:", controlled.name, "playerId:", controlled.playerId, "sessionId:", state.room.sessionId);
+      return controlled;
+    }
+
+    // If not found by playerId, try by saved leviathanId (fallback for reconnection edge cases)
+    const activeSession = window.KaijuSession?.getActiveMatchSession?.();
+    const savedLeviathanId = activeSession?.leviathanId;
+    
+    console.log("[findControlledLeviathan DEBUG]", {
+      sessionId: state.room.sessionId,
+      leviathanCount: state.room.state.leviathans.length,
+      savedLeviathanId,
+      leviathans: state.room.state.leviathans.map(l => ({ id: l.id, name: l.name, playerId: l.playerId }))
+    });
+
+    if (savedLeviathanId) {
+      state.room.state.leviathans.forEach((leviathan) => {
+        if (leviathan.id === savedLeviathanId && leviathan.playerId === state.room.sessionId) {
+          controlled = leviathan;
+          console.log("[findControlledLeviathan] Found by leviathanId:", controlled.name);
+        }
+      });
+    }
 
     return controlled;
   }
@@ -1192,7 +1220,7 @@
 
     state.controlledLeviathan = findControlledLeviathan();
     updatePhaseUi();
-    updateConnectionState(`ONLINE ROOM ${room.id}`, "nominal");
+    updateConnectionState(`ONLINE ROOM ${room.roomId || room.id || "unknown"}`, "nominal");
   }
 
   async function reconnectActiveMatch() {
@@ -1223,11 +1251,7 @@
       return;
     }
 
-    const room = await window.KaijuColyseusClient.joinMatchById(client, selectedRoomId, {
-      playerName: playerName,
-      playerRole: "kaiju",
-      reconnectToken,
-    });
+    const room = await client.reconnect(reconnectToken);
     bindRoom(room);
   }
 

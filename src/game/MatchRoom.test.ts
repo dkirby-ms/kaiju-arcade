@@ -177,7 +177,7 @@ describe("MatchRoom role assignment", () => {
     room.onDispose();
   });
 
-  it("allows kaiju reconnect reclaim during grace window", () => {
+  it("allows kaiju reconnect within reconnection window", async () => {
     const room = new MatchRoom();
 
     room.onCreate({ cityName: "Neo Tokyo" });
@@ -195,31 +195,30 @@ describe("MatchRoom role assignment", () => {
     );
     expect(kaijuSlot).toBeDefined();
 
-    room.onLeave(
+    const allowReconnectionMock = jest.fn().mockResolvedValue(undefined);
+    (room as unknown as { allowReconnection: typeof allowReconnectionMock }).allowReconnection =
+      allowReconnectionMock;
+
+    await room.onLeave(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       1006
     );
 
     expect(kaijuSlot?.isAI).toBe(false);
-    expect(kaijuSlot?.playerId).toBe("");
+    expect(kaijuSlot?.playerId).toBe("session-2");
+    expect(allowReconnectionMock).toHaveBeenCalled();
 
-    const reconnectToken = (
-      room as unknown as { reconnectTokenByLeviathanId: Map<string, string> }
-    ).reconnectTokenByLeviathanId.get(kaijuSlot?.id ?? "");
-    expect(reconnectToken).toBeDefined();
-
-    room.onJoin(
-      { id: "client-3", sessionId: "session-3" } as unknown as never,
-      { playerName: "Kaiju One", reconnectToken }
+    room.onReconnect(
+      { id: "client-2", sessionId: "session-2" } as unknown as never
     );
 
     expect(kaijuSlot?.isAI).toBe(false);
-    expect(kaijuSlot?.playerId).toBe("session-3");
+    expect(kaijuSlot?.playerId).toBe("session-2");
 
     room.onDispose();
   });
 
-  it("allows commander reconnect reclaim during grace window", () => {
+  it("allows commander reconnect within reconnection window", async () => {
     const room = new MatchRoom();
 
     room.onCreate({ cityName: "Neo Tokyo" });
@@ -228,30 +227,29 @@ describe("MatchRoom role assignment", () => {
       { playerName: "Commander One", playerRole: "COMMANDER" }
     );
 
-    room.onLeave(
+    const allowReconnectionMock = jest.fn().mockResolvedValue(undefined);
+    (room as unknown as { allowReconnection: typeof allowReconnectionMock }).allowReconnection =
+      allowReconnectionMock;
+
+    await room.onLeave(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
       1006
     );
 
-    const reconnectWindow = (room as unknown as {
-      commanderReconnectWindow?: { reconnectToken: string };
-    }).commanderReconnectWindow;
+    expect(allowReconnectionMock).toHaveBeenCalled();
+    expect(room.state.commander.playerId).toBe("session-1");
 
-    expect(reconnectWindow?.reconnectToken).toBeDefined();
-    expect(room.state.commander.playerId).toBe("");
-
-    room.onJoin(
-      { id: "client-2", sessionId: "session-2" } as unknown as never,
-      { playerName: "Commander One", reconnectToken: reconnectWindow?.reconnectToken }
+    room.onReconnect(
+      { id: "client-1", sessionId: "session-1" } as unknown as never
     );
 
-    expect(room.state.commander.playerId).toBe("session-2");
+    expect(room.state.commander.playerId).toBe("session-1");
     expect(room.state.commander.playerName).toBe("Commander One");
 
     room.onDispose();
   });
 
-  it("does not reclaim grace slot without reconnect token", () => {
+  it("cleans up kaiju claim when reconnection window expires", async () => {
     const room = new MatchRoom();
 
     room.onCreate({ cityName: "Neo Tokyo" });
@@ -269,18 +267,17 @@ describe("MatchRoom role assignment", () => {
     );
     expect(kaijuSlot).toBeDefined();
 
-    room.onLeave(
+    const allowReconnectionMock = jest.fn().mockRejectedValue(new Error("timeout"));
+    (room as unknown as { allowReconnection: typeof allowReconnectionMock }).allowReconnection =
+      allowReconnectionMock;
+
+    await room.onLeave(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       1006
     );
 
-    room.onJoin(
-      { id: "client-3", sessionId: "session-3" } as unknown as never,
-      { playerName: "Kaiju One" }
-    );
-
     expect(kaijuSlot?.playerId).toBe("");
-    expect(kaijuSlot?.isAI).toBe(false);
+    expect(kaijuSlot?.isAI).toBe(true);
 
     room.onDispose();
   });
@@ -1035,7 +1032,7 @@ describe("MatchRoom drain and capacity resilience", () => {
     room.onDispose();
   });
 
-  it("allows reconnect during drain", () => {
+  it("allows reconnect during drain", async () => {
     const room = new MatchRoom();
     room.onCreate({ cityName: "Neo Tokyo" });
 
@@ -1053,24 +1050,22 @@ describe("MatchRoom drain and capacity resilience", () => {
     );
     expect(kaijuSlot).toBeDefined();
 
-    room.onLeave(
+    const allowReconnectionMock = jest.fn().mockResolvedValue(undefined);
+    (room as unknown as { allowReconnection: typeof allowReconnectionMock }).allowReconnection =
+      allowReconnectionMock;
+
+    await room.onLeave(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
       1006
     );
 
-    const reconnectToken = (
-      room as unknown as { reconnectTokenByLeviathanId: Map<string, string> }
-    ).reconnectTokenByLeviathanId.get(kaijuSlot?.id ?? "");
-    expect(reconnectToken).toBeDefined();
-
     startDrain(30_000);
 
-    room.onJoin(
-      { id: "client-3", sessionId: "session-3" } as unknown as never,
-      { playerName: "Kaiju One", reconnectToken }
+    room.onReconnect(
+      { id: "client-2", sessionId: "session-2" } as unknown as never
     );
 
-    expect(kaijuSlot?.playerId).toBe("session-3");
+    expect(kaijuSlot?.playerId).toBe("session-2");
     expect(kaijuSlot?.isAI).toBe(false);
 
     room.onDispose();
@@ -1158,6 +1153,13 @@ describe("MatchRoom drain and capacity resilience", () => {
     const disconnectSpy = jest.fn();
     (room as unknown as { disconnect: typeof disconnectSpy }).disconnect = disconnectSpy;
 
+    const pendingReconnect = new Promise<void>(() => {
+      // Intentionally unresolved: simulates grace window still open.
+    });
+    const allowReconnectionMock = jest.fn().mockReturnValue(pendingReconnect);
+    (room as unknown as { allowReconnection: typeof allowReconnectionMock }).allowReconnection =
+      allowReconnectionMock;
+
     room.onCreate({ cityName: "Neo Tokyo" });
 
     room.onJoin(
@@ -1178,23 +1180,19 @@ describe("MatchRoom drain and capacity resilience", () => {
 
     expect(room.state.metadata.state).toBe("ACTIVE");
 
-    // Simulate intentional client transition to role pages (normal close code 1000).
+    // Simulate abrupt handoff disconnects while role pages reconnect.
     room.onLeave(
       { id: "client-1", sessionId: "session-1" } as unknown as never,
-      1000
+      1006
     );
     room.onLeave(
       { id: "client-2", sessionId: "session-2" } as unknown as never,
-      1000
+      1006
     );
 
-    const internalState = room as unknown as {
-      reconnectGraceWindows: Map<string, unknown>;
-      commanderReconnectWindow?: unknown;
-    };
-
-    expect(internalState.commanderReconnectWindow).toBeDefined();
-    expect(internalState.reconnectGraceWindows.size).toBeGreaterThan(0);
+    const sessions = (room as unknown as { playerSessions: Map<string, unknown> }).playerSessions;
+    expect(allowReconnectionMock).toHaveBeenCalledTimes(2);
+    expect(sessions.size).toBe(2);
     expect(disconnectSpy).not.toHaveBeenCalled();
 
     room.onDispose();

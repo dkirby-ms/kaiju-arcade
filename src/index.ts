@@ -10,6 +10,7 @@ import { createServer } from "http";
 import path from "path";
 import { Server as ColyseusServer } from "colyseus";
 import { matchMaker } from "colyseus";
+import { createNodeMatchmakingMiddleware } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./game/MatchRoom";
 import { getAvailableCities, normalizeRequestedCityName } from "./game/lastStandCities";
@@ -35,6 +36,7 @@ const hostname = config.HOST;
 // Middleware
 app.use(express.json());
 app.use(requestLogger);
+app.use(createNodeMatchmakingMiddleware() as unknown as express.RequestHandler);
 app.use(
   "/commander",
   express.static(path.resolve(__dirname, "../public/commander"))
@@ -237,11 +239,8 @@ app.post("/api/matches/:roomId/join", joinRateLimiter, async (req, res) => {
     const body = (req.body || {}) as Record<string, unknown>;
     const options: Record<string, unknown> = {
       ...(typeof body.playerName === "string" ? { playerName: body.playerName } : {}),
-      ...(typeof body.playerRole === "string" ? { playerRole: body.playerRole } : {}),
       ...(typeof body.reconnectToken === "string" ? { reconnectToken: body.reconnectToken } : {}),
     };
-
-    console.log(`[TOKEN] /api/matches/join: roomId=${roomId}, playerRole=${body.playerRole || 'MISSING'}, reconnectToken from body=${body.reconnectToken ? String(body.reconnectToken).slice(0, 8) : 'MISSING'}`);
 
     const reservation = await matchMaker.joinById(roomId, options);
 

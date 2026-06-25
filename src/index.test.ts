@@ -17,6 +17,7 @@ jest.mock("colyseus", () => ({
   Server: jest.fn().mockImplementation(() => ({
     define: mockDefine,
   })),
+  createNodeMatchmakingMiddleware: jest.fn().mockImplementation(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   Room: class {
     onMessage(_type: string, _handler: unknown): void {
       // no-op for unit tests
@@ -432,6 +433,7 @@ describe("API /api/matches", () => {
     expect(response.body.roomId).toBe("room-1");
     expect(mockJoinById).toHaveBeenCalledWith("room-1", {
       playerName: "Kaiju Pilot",
+      playerRole: "kaiju",
       reconnectToken: "reco-1",
     });
   });
