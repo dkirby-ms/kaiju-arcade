@@ -10,7 +10,7 @@
     <script src="/vendor/colyseus-sdk-0.17.js"></script>
   </head>
   <body>
-    <main class="hud-shell">
+    <main class="hud-shell" data-testid="kaiju-root">
       <header class="hud-header panel">
         <h1>KAIJU PILOT HUD</h1>
         <p class="subline">MOBILE COMMAND SURFACE</p>
@@ -37,7 +37,7 @@
         <p id="connectionState" class="status">OFFLINE</p>
       </section>
 
-      <section class="panel map-panel" data-active-ui="true">
+      <section class="panel map-panel" data-active-ui="true" data-testid="kaiju-active-ui">
         <h2>TACTICAL MAP</h2>
         <p id="mapAttackHint" class="map-attack-hint">Click map to attack when in range.</p>
         <div class="spectator-map-shell">
