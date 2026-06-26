@@ -36,6 +36,7 @@ body {
   display: grid;
   gap: 0;
   grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
   grid-template-areas:
     "map";
 }
@@ -157,16 +158,20 @@ button.secondary {
   left: 0.85rem;
   z-index: 6;
   width: min(360px, calc(100vw - 1.7rem));
+  max-height: min(calc(100vh - 16rem), 36rem);
+  overflow-y: auto;
 }
 
 /* --- TACTICAL HUD: Top-center bar --- */
+/* Left edge is clamped past the session panel (360px + 2 * 0.85rem gaps)
+   so the HUD never overlaps the panel on narrower viewports. */
 .tactical-hud {
   position: absolute;
   top: 0.85rem;
-  left: 50%;
+  left: clamp(calc(360px + 2.55rem), 50%, calc(100vw - 0.85rem));
   transform: translateX(-50%);
   z-index: 5;
-  width: min(800px, calc(100vw - 1.7rem));
+  width: min(800px, calc(100vw - 380px - 1.7rem));
   padding: 0.5rem;
 }
 
@@ -292,6 +297,8 @@ button.secondary {
   left: 0.85rem;
   z-index: 6;
   width: min(420px, calc(100vw - 1.7rem));
+  max-height: min(calc(100vh - 12rem), 28rem);
+  overflow-y: auto;
 }
 
 .dispatch-target-row {

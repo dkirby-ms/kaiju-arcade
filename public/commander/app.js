@@ -32,6 +32,8 @@
   // Seattle metro bounding box: game coords (0-100) map to this lat/lng region.
   // City base at (50,50) = downtown Seattle (~47.6062°N, 122.3321°W).
   // North edge reaches Kirkland/Redmond; East edge covers Bellevue/Issaquah.
+  const MAP_CENTER = [47.6062, -122.3321];
+  const MAP_ZOOM = 12;
   const MAP_BOUNDS = {
     north: 47.7412,
     south: 47.4712,
@@ -40,8 +42,8 @@
   };
 
   const leafletMap = window.L.map("leafletMap", {
-    center: [47.6062, -122.3321],
-    zoom: 12,
+    center: MAP_CENTER,
+    zoom: MAP_ZOOM,
     zoomControl: false,
     attributionControl: true,
     dragging: false,
@@ -285,13 +287,20 @@
   // Wait for DOM to be fully ready before sizing canvas
   function initializeMapRendering() {
     sizeCanvas();
-    // Re-size after a short delay to ensure layout is stable
+    // Quick initial pass in case layout is already stable
     setTimeout(() => {
       sizeCanvas();
       leafletMap.invalidateSize();
-      // Center the map on the city base after container is properly sized
-      leafletMap.setView([47.6062, -122.3321], 12);
+      leafletMap.setView(MAP_CENTER, MAP_ZOOM);
     }, 100);
+    // ResizeObserver catches late layout shifts (e.g. after grid stabilises)
+    if (typeof ResizeObserver !== "undefined") {
+      const mapResizeObserver = new ResizeObserver(() => {
+        sizeCanvas();
+        leafletMap.invalidateSize();
+      });
+      mapResizeObserver.observe(document.getElementById("leafletMap"));
+    }
     requestAnimationFrame(drawCommandMap);
   }
   
@@ -607,6 +616,7 @@
     refreshTargets();
     renderLobbyRoster();
 
+    let mapSettledOnFirstState = false;
     room.onStateChange(() => {
       if (room.state?.metadata?.state) {
         state.phase = room.state.metadata.state;
@@ -618,7 +628,13 @@
       updatePhaseUi();
       reconcileAlertMode();
       // Ensure map is centered on city base when state updates
-      leafletMap.setView([47.6062, -122.3321], 12);
+      leafletMap.setView(MAP_CENTER, MAP_ZOOM);
+      // Re-validate map size once on first live state to guard against any
+      // layout shift that occurred between map init and server handshake.
+      if (!mapSettledOnFirstState) {
+        mapSettledOnFirstState = true;
+        leafletMap.invalidateSize();
+      }
     });
 
     room.onMessage("match.phase", (payload) => {
