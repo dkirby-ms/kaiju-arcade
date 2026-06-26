@@ -245,7 +245,7 @@
     </style>
   </head>
   <body>
-    <main>
+    <main data-testid="match-room-root">
       <section class="hero">
         <h1>Shared Match Room</h1>
         <p>
@@ -256,8 +256,8 @@
 
       <div class="status-bar">
         <span class="pill">Player <strong id="playerName">-</strong></span>
-        <span class="pill">Room <strong id="roomId">-</strong></span>
-        <span class="pill">Phase <strong id="phaseState">WAITING</strong></span>
+        <span class="pill">Room <strong id="roomId" data-testid="match-room-id">-</strong></span>
+        <span class="pill">Phase <strong id="phaseState" data-testid="match-room-phase">WAITING</strong></span>
         <span class="pill">Connection <strong id="connectionState">OFFLINE</strong></span>
       </div>
 
@@ -282,8 +282,8 @@
           <div>
             <h2>Role Claim</h2>
             <div class="role-actions">
-              <button id="claimCommanderButton" class="secondary" type="button">Claim Commander</button>
-              <button id="claimKaijuButton" class="secondary" type="button">Claim Kaiju</button>
+              <button id="claimCommanderButton" class="secondary" type="button" data-testid="claim-commander-button">Claim Commander</button>
+              <button id="claimKaijuButton" class="secondary" type="button" data-testid="claim-kaiju-button">Claim Kaiju</button>
               <button id="releaseRoleButton" class="ghost" type="button">Release Role</button>
             </div>
           </div>
@@ -291,8 +291,8 @@
           <div>
             <h2>Ready Check</h2>
             <div class="role-actions">
-              <button id="readyToggleButton" class="primary" type="button">Mark Ready</button>
-              <button id="startMatchButton" class="secondary" type="button">Start Match</button>
+              <button id="readyToggleButton" class="primary" type="button" data-testid="ready-toggle-button">Mark Ready</button>
+              <button id="startMatchButton" class="secondary" type="button" data-testid="start-match-button">Start Match</button>
             </div>
           </div>
 

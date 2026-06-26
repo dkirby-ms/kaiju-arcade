@@ -49,58 +49,58 @@ Implement deterministic Playwright end-to-end coverage for critical multiplayer 
 
 ## Implementation Checklist
 
-### [ ] Implementation Phase 1: Playwright Foundation Setup
+### [x] Implementation Phase 1: Playwright Foundation Setup
 
 <!-- parallelizable: false -->
 
-* [ ] Step 1.1: Add `@playwright/test` and e2e scripts to `package.json`
+* [x] Step 1.1: Add `@playwright/test` and e2e scripts to `package.json`
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 13-33)
-* [ ] Step 1.2: Create `playwright.config.ts` with deterministic local/CI settings and webServer health gating
+* [x] Step 1.2: Create `playwright.config.ts` with deterministic local/CI settings and webServer health gating
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 37-62)
-* [ ] Step 1.3: Create `tests/e2e` scaffold and shared helpers for two-context multiplayer execution
+* [x] Step 1.3: Create `tests/e2e` scaffold and shared helpers for two-context multiplayer execution
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 63-82)
-* [ ] Step 1.4: Validate phase changes
+* [x] Step 1.4: Validate phase changes
   * Run dependency install and Playwright browser install for Chromium
   * Run config-level dry run (`npx playwright test --list`)
 
-### [ ] Implementation Phase 2: P0 Merge-Gating UI Journey Specs
+### [x] Implementation Phase 2: P0 Merge-Gating UI Journey Specs
 
 <!-- parallelizable: false -->
 
-* [ ] Step 2.1: Implement `tests/e2e/entry-lobby-smoke.spec.ts` for entry to lobby path validation
+* [x] Step 2.1: Implement `tests/e2e/entry-lobby-smoke.spec.ts` for entry to lobby path validation
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 93-114)
-* [ ] Step 2.2: Implement `tests/e2e/multiplayer-start.spec.ts` using isolated browser contexts for commander and kaiju
+* [x] Step 2.2: Implement `tests/e2e/multiplayer-start.spec.ts` using isolated browser contexts for commander and kaiju
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 116-140)
-* [ ] Step 2.3: Harden UI selectors with `data-testid` attributes in lobby and match-room surfaces
+* [x] Step 2.3: Harden UI selectors with `data-testid` attributes in lobby and match-room surfaces
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 142-163)
-* [ ] Step 2.4: Validate phase changes
+* [x] Step 2.4: Validate phase changes
   * Run `npx playwright test tests/e2e/entry-lobby-smoke.spec.ts`
   * Run `npx playwright test tests/e2e/multiplayer-start.spec.ts`
 
-### [ ] Implementation Phase 3: Optional P1 API-Assisted Coverage Expansion
+### [x] Implementation Phase 3: Optional P1 API-Assisted Coverage Expansion
 
 <!-- parallelizable: true -->
 
-* [ ] Step 3.1: Optional - implement `tests/e2e/start-gating.spec.ts` with API-assisted room setup and ready-state assertions
+* [x] Step 3.1: Optional - implement `tests/e2e/start-gating.spec.ts` with API-assisted room setup and ready-state assertions
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 175-195)
-* [ ] Step 3.2: Add optional `tests/e2e/continue-window.spec.ts` skeleton for P2 continuation and spectator transition
+* [x] Step 3.2: Add optional `tests/e2e/continue-window.spec.ts` skeleton for P2 continuation and spectator transition
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 197-215)
-* [ ] Step 3.3: Add CI workflow `.github/workflows/e2e-playwright.yml` for deterministic execution artifacts
+* [x] Step 3.3: Add CI workflow `.github/workflows/e2e-playwright.yml` for deterministic execution artifacts
   * Details: .copilot-tracking/details/2026-06-25/issue-22-playwright-test-coverage-details.md (Lines 217-236)
-* [ ] Step 3.4: Validate phase changes
+* [x] Step 3.4: Validate phase changes
   * Run `npx playwright test tests/e2e/start-gating.spec.ts`
   * Run workflow YAML lint/validation if available
 
-### [ ] Implementation Phase 4: Validation
+### [x] Implementation Phase 4: Validation
 
 <!-- parallelizable: false -->
 
-* [ ] Step 4.1: Run full project validation
+* [x] Step 4.1: Run full project validation
   * Execute `npm test`
   * Execute `npm run test:e2e`
-* [ ] Step 4.2: Fix minor validation issues
+* [x] Step 4.2: Fix minor validation issues
   * Resolve straightforward selector, timeout, and assertion hardening issues
-* [ ] Step 4.3: Report blocking issues
+* [x] Step 4.3: Report blocking issues
   * Document unresolved flake sources or environment blockers requiring follow-on research
 
 ## Planning Log

@@ -7,6 +7,12 @@ export interface MultiplayerPages {
   kaijuPage: Page;
 }
 
+export interface MatchRoomSessionSeed {
+  playerName: string;
+  roomId: string;
+  reservation?: unknown;
+}
+
 export async function createMultiplayerPages(browser: Browser): Promise<MultiplayerPages> {
   const commanderContext = await browser.newContext();
   const kaijuContext = await browser.newContext();
@@ -31,4 +37,16 @@ export async function cleanupMultiplayerPages(multiplayerPages: MultiplayerPages
     multiplayerPages.commanderContext.close(),
     multiplayerPages.kaijuContext.close(),
   ]);
+}
+
+export async function seedMatchRoomSession(page: Page, seed: MatchRoomSessionSeed): Promise<void> {
+  await page.addInitScript((payload: MatchRoomSessionSeed) => {
+    sessionStorage.setItem("playerName", payload.playerName);
+    sessionStorage.setItem("currentMatchId", payload.roomId);
+    sessionStorage.setItem("currentRoomName", "match");
+
+    if (payload.reservation) {
+      sessionStorage.setItem("pendingSeatReservation", JSON.stringify(payload.reservation));
+    }
+  }, seed);
 }

@@ -155,7 +155,7 @@
     </style>
   </head>
   <body>
-    <main class="layout">
+    <main class="layout" data-testid="lobby-root">
       <h1>Matchmaking Lobby</h1>
       <p class="summary">Discover active matches in realtime or create a new one.</p>
 
@@ -164,7 +164,7 @@
       </section>
 
       <section class="controls" aria-label="Lobby actions">
-        <button id="createMatchButton" class="primary" type="button">Create Match</button>
+        <button id="createMatchButton" class="primary" type="button" data-testid="create-match-button">Create Match</button>
         <button id="refreshButton" class="secondary" type="button">Refresh List</button>
         <button id="changeIdentityButton" class="danger" type="button">Change Identity</button>
       </section>
@@ -172,7 +172,7 @@
       <p id="statusText" class="status">Connecting to lobby...</p>
       <p id="errorText" class="error" role="alert" aria-live="polite"></p>
 
-      <ul id="roomList" aria-label="Available matches"></ul>
+      <ul id="roomList" aria-label="Available matches" data-testid="lobby-room-list"></ul>
     </main>
 
     <script src="/common/session-manager.js"></script>
@@ -325,6 +325,7 @@
             const joinMatchBtn = document.createElement("button");
             joinMatchBtn.className = "secondary";
             joinMatchBtn.type = "button";
+            joinMatchBtn.setAttribute("data-testid", `enter-match-${room.roomId}`);
             joinMatchBtn.textContent = "Enter Match Room";
             joinMatchBtn.disabled = state.isBusy || (!slots.commanderAvailable && !slots.kaijuAvailable);
             joinMatchBtn.addEventListener("click", () => {

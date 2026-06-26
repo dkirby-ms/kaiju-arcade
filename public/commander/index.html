@@ -10,7 +10,7 @@
     <script src="/vendor/colyseus-sdk-0.17.js"></script>
   </head>
   <body>
-    <main class="hud-shell">
+    <main class="hud-shell" data-testid="commander-root">
       <!-- HEADER: Top-left position -->
       <header class="panel hud-header">
         <h1>COMMANDER CONSOLE</h1>
@@ -34,7 +34,7 @@
       </section>
 
       <!-- TACTICAL HUD: Top-center bar with status and feed combined -->
-      <section class="panel tactical-hud" data-active-ui="true">
+      <section class="panel tactical-hud" data-active-ui="true" data-testid="commander-active-ui">
         <div class="hud-content">
           <div class="hud-status-group">
             <div class="hud-stat">
