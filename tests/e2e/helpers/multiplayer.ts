@@ -1,4 +1,5 @@
 import { Browser, BrowserContext, Page } from "@playwright/test";
+import type { ApiSeatReservation } from "./api.js";
 
 export interface MultiplayerPages {
   commanderContext: BrowserContext;
@@ -10,7 +11,7 @@ export interface MultiplayerPages {
 export interface MatchRoomSessionSeed {
   playerName: string;
   roomId: string;
-  reservation?: unknown;
+  reservation?: ApiSeatReservation;
 }
 
 export async function createMultiplayerPages(browser: Browser): Promise<MultiplayerPages> {
@@ -26,10 +27,6 @@ export async function createMultiplayerPages(browser: Browser): Promise<Multipla
     commanderPage,
     kaijuPage,
   };
-}
-
-export async function gotoLobby(pages: Pick<MultiplayerPages, "commanderPage" | "kaijuPage">): Promise<void> {
-  await Promise.all([pages.commanderPage.goto("/lobby"), pages.kaijuPage.goto("/lobby")]);
 }
 
 export async function cleanupMultiplayerPages(multiplayerPages: MultiplayerPages): Promise<void> {

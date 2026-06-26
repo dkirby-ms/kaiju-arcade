@@ -23,21 +23,48 @@ export interface JoinMatchRequest {
   reconnectToken?: string;
 }
 
-async function postJson<TResponse>(baseURL: string, path: string, body: Record<string, unknown>): Promise<TResponse> {
-  const response = await fetch(new URL(path, baseURL), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+const DEFAULT_TIMEOUT_MS = 10_000;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Request failed (${response.status}) ${path}: ${errorText}`);
+interface PostJsonOptions {
+  timeoutMs?: number;
+}
+
+async function postJson<TResponse>(
+  baseURL: string,
+  path: string,
+  body: Record<string, unknown>,
+  options?: PostJsonOptions,
+): Promise<TResponse> {
+  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutHandle = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(new URL(path, baseURL), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Request failed (${response.status}) ${path}: ${errorText}`);
+    }
+
+    return (await response.json()) as TResponse;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timeout after ${timeoutMs}ms: ${path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
-
-  return (await response.json()) as TResponse;
 }
 
 export async function createMatchReservation(

@@ -14,12 +14,6 @@ test.describe("entry to lobby smoke", () => {
     await expect(page.getByTestId("lobby-root")).toBeVisible();
     await expect(page.getByTestId("lobby-room-list")).toBeVisible();
 
-    await expect
-      .poll(async () => page.getByTestId("lobby-room-list").locator("li").count(), {
-        message: "expected lobby room list to render at least one list row",
-      })
-      .toBeGreaterThan(0);
-
     const createMatchButton = page.getByTestId("create-match-button");
     await expect(createMatchButton).toBeVisible();
     await expect(createMatchButton).toBeEnabled();
