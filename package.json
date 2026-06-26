@@ -15,6 +15,10 @@
     "clean": "rm -rf dist",
     "test": "jest",
     "test:watch": "jest --watch",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
     "lint": "eslint src --ext .ts",
     "version:patch": "semver patch $(node -e \"console.log(require('./package.json').version)\") | xargs -I {} npm version {}",
     "version:minor": "semver minor $(node -e \"console.log(require('./package.json').version)\") | xargs -I {} npm version {}",
@@ -37,6 +41,7 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.1",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.12",
     "@types/node": "^22.0.0",
